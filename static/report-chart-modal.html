@@ -1,0 +1,532 @@
+<script src="https://unpkg.com/lightweight-charts@4.2.0/dist/lightweight-charts.standalone.production.js"></script>
+<script>
+(function () {
+  const PACKS = window.CHART_PACKS || {};
+
+  const modal = document.getElementById("chart-modal");
+  const titleEl = document.getElementById("chart-title");
+  const subEl = document.getElementById("chart-sub");
+  const statusEl = document.getElementById("chart-status");
+  const lwcEl = document.getElementById("lwc");
+  const frameEl = document.getElementById("tv-frame");
+  const closeBtn = document.getElementById("chart-close");
+  let chart = null;
+  let series = null;
+  let overlays = [];
+  let openToken = 0;
+  let resizeObs = null;
+  let remoteCharts = null;
+  let remoteChartsPromise = null;
+
+  function chartPackUrls() {
+    const path = location.pathname || "/";
+    const base = path.endsWith("/") ? path : path.slice(0, path.lastIndexOf("/") + 1) || "/";
+    return [base + "chart-packs.json"];
+  }
+
+  async function loadRemoteCharts() {
+    if (remoteCharts) return remoteCharts;
+    if (!remoteChartsPromise) {
+      remoteChartsPromise = (async () => {
+        const merged = {};
+        for (const url of chartPackUrls()) {
+          try {
+            const res = await fetch(url, { cache: "no-store" });
+            if (!res.ok) continue;
+            const data = await res.json();
+            Object.assign(merged, data.charts || {});
+          } catch (_) {}
+        }
+        if (!Object.keys(merged).length) {
+          try {
+            const res = await fetch(
+              (location.pathname || "/").replace(/[^/]*$/, "") + "chart-packs.json",
+              { cache: "no-store" }
+            );
+            if (res.ok) {
+              const data = await res.json();
+              Object.assign(merged, data.charts || {});
+            }
+          } catch (_) {}
+        }
+        return merged;
+      })();
+    }
+    remoteCharts = await remoteChartsPromise;
+    return remoteCharts;
+  }
+
+  async function resolvePack(group, symbol, tf) {
+    const key = packKey(group, symbol, tf);
+    const local = PACKS[key];
+    if (local && local.candles && local.candles.length) return local;
+    const remote = await loadRemoteCharts();
+    const pack = remote[key];
+    if (pack && pack.candles && pack.candles.length) return pack;
+    return null;
+  }
+
+  function packKey(group, symbol, tf) {
+    return group + "|" + symbol + "|" + tf;
+  }
+
+  function tvSymbol(group, symbol, tvOverride) {
+    if (tvOverride) return tvOverride;
+    if (group === "dji") return "DJI";
+    if (group === "twse") return "TWSE:" + symbol.replace(".TW", "");
+    if (group === "tpex") return "TPEX:" + symbol.replace(".TWO", "");
+    if (symbol === "TXF1!" || symbol.endsWith("TXF1!")) return "TAIFEX:TXF1!";
+    return symbol;
+  }
+
+  function buildTvEmbedUrl(group, symbol, tf, opts) {
+    const tv = tvSymbol(group, symbol, opts && opts.tvSymbol);
+    const params = new URLSearchParams({
+      symbol: tv,
+      interval: tvInterval(tf),
+      theme: "dark",
+      style: "1",
+      locale: "zh_TW",
+      timezone: "Asia/Taipei",
+      toolbarbg: "0c121c",
+      hideideas: "1",
+      hidesidetoolbar: "0",
+      symboledit: "1",
+      saveimage: "0",
+      withdateranges: "1",
+    });
+    if (opts && opts.logScale) {
+      params.set("overrides", JSON.stringify({
+        "mainSeriesProperties.priceAxisProperties.log": true,
+      }));
+    }
+    return "https://s.tradingview.com/widgetembed/?" + params.toString();
+  }
+
+  function tvInterval(tf) {
+    return tf === "1d" ? "D" : "60";
+  }
+
+  function fmtLevel(v) {
+    const n = Number(v);
+    if (!Number.isFinite(n)) return String(v || "");
+    return n.toLocaleString(undefined, { maximumFractionDigits: 8 });
+  }
+
+  function typeLabel(type, kind) {
+    if (kind === "ar_dr_touch") return type || "AR/DR";
+    if (kind === "ar_dr_near") return (type || "AR/DR") + " 接近未觸";
+    if (kind === "trend_exceed") {
+      if (type === "resistance") return "阻力超出";
+      if (type === "support") return "支撐超出";
+    }
+    if (type === "resistance") return "阻力線";
+    if (type === "support") return "支撐線";
+    return type || "觸碰";
+  }
+
+  function destroyChart() {
+    if (resizeObs) { resizeObs.disconnect(); resizeObs = null; }
+    overlays = [];
+    if (chart) {
+      chart.remove();
+      chart = null;
+      series = null;
+    }
+    lwcEl.innerHTML = "";
+    frameEl.removeAttribute("src");
+    frameEl.hidden = true;
+    lwcEl.hidden = true;
+  }
+
+  function closeModal() {
+    openToken += 1;
+    destroyChart();
+    modal.classList.remove("open");
+    modal.hidden = true;
+    modal.setAttribute("aria-hidden", "true");
+    document.body.style.overflow = "";
+  }
+
+  function showStatus(msg) {
+    statusEl.hidden = false;
+    statusEl.textContent = msg;
+  }
+
+  function hideStatus() {
+    statusEl.hidden = true;
+  }
+
+  function drawSegment(t0, p0, t1, p1, color, width, style) {
+    if (t0 == null || t1 == null || t0 === t1) return;
+    const s = chart.addLineSeries({
+      color,
+      lineWidth: width,
+      lineStyle: style ?? LightweightCharts.LineStyle.Solid,
+      priceLineVisible: false,
+      lastValueVisible: false,
+      crosshairMarkerVisible: false,
+    });
+    s.setData([
+      { time: t0, value: p0 },
+      { time: t1, value: p1 },
+    ]);
+    overlays.push(s);
+  }
+
+  function rayColor(type, active) {
+    const rgb = type === "AR" ? "0,232,150" : "255,77,109";
+    return active ? `rgba(${rgb},1)` : `rgba(${rgb},0.35)`;
+  }
+
+  function markerColor(type, active) {
+    if (type === "AR") return active ? "#00e896" : "rgba(0,232,150,0.35)";
+    return active ? "#ff4d6d" : "rgba(255,77,109,0.35)";
+  }
+
+  function drawRaySegments(ray, lastTime) {
+    const segs = ray.segments || [];
+    for (const seg of segs) {
+      if (seg.t0 == null || seg.t1 == null || seg.t0 >= seg.t1) continue;
+      drawSegment(
+        seg.t0,
+        seg.price,
+        seg.t1,
+        seg.price,
+        rayColor(ray.type, seg.active),
+        seg.side === "upper" ? 1 : 1,
+        LightweightCharts.LineStyle.Dashed
+      );
+    }
+  }
+
+  function normalizeCandles(candles) {
+    const out = [];
+    let prev = null;
+    for (const c of candles) {
+      const t = c.time;
+      if (prev != null && t <= prev) continue;
+      out.push({
+        time: t,
+        open: c.open,
+        high: c.high,
+        low: c.low,
+        close: c.close,
+      });
+      prev = t;
+    }
+    return out;
+  }
+
+  function renderPack(pack) {
+    destroyChart();
+    lwcEl.hidden = false;
+    frameEl.hidden = true;
+    const candles = normalizeCandles(pack.candles || []);
+    if (!candles.length) throw new Error("no candles");
+
+    chart = LightweightCharts.createChart(lwcEl, {
+      layout: { background: { color: "#000000" }, textColor: "#7a93a8" },
+      grid: {
+        vertLines: { color: "rgba(0,240,200,0.05)" },
+        horzLines: { color: "rgba(0,240,200,0.05)" },
+      },
+      rightPriceScale: { borderColor: "#2a364d" },
+      timeScale: { borderColor: "#2a364d", timeVisible: true, secondsVisible: false },
+      crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
+    });
+    series = chart.addCandlestickSeries({
+      upColor: "#00e896",
+      downColor: "#ff4d6d",
+      borderUpColor: "#00e896",
+      borderDownColor: "#ff4d6d",
+      wickUpColor: "#5dffb1",
+      wickDownColor: "#ff7a90",
+    });
+    series.setData(candles);
+
+    (pack.trend_lines || []).forEach((line) => {
+      const alpha = line.invalidated ? 0.3 : 0.95;
+      const color = line.type === "resistance"
+        ? `rgba(239,68,68,${alpha})`
+        : `rgba(34,197,94,${alpha})`;
+      drawSegment(line.p1.time, line.p1.price, line.endTime, line.endPrice, color, 2);
+      drawSegment(line.p1.time, line.p1.price, line.p2.time, line.p2.price, color, 1, LightweightCharts.LineStyle.Dotted);
+    });
+
+    const markers = [];
+    const lastTime = candles[candles.length - 1].time;
+    (pack.rays || []).forEach((ray) => {
+      drawRaySegments(ray, lastTime);
+      markers.push({
+        time: ray.time,
+        position: ray.type === "AR" ? "belowBar" : "aboveBar",
+        color: markerColor(ray.type, ray.active),
+        shape: "circle",
+        size: ray.active ? 2 : 1,
+        text: ray.type,
+      });
+    });
+    markers.sort((a, b) => a.time - b.time);
+    series.setMarkers(markers);
+
+    chart.timeScale().fitContent();
+    resizeObs = new ResizeObserver(() => {
+      if (!chart) return;
+      chart.applyOptions({ width: lwcEl.clientWidth, height: lwcEl.clientHeight });
+    });
+    resizeObs.observe(lwcEl);
+    chart.applyOptions({ width: lwcEl.clientWidth, height: lwcEl.clientHeight });
+  }
+
+  function renderTradingView(group, symbol, tf, opts) {
+    destroyChart();
+    lwcEl.hidden = true;
+    frameEl.hidden = false;
+    frameEl.src = buildTvEmbedUrl(group, symbol, tf, opts);
+  }
+
+  function ardrSummary(pack) {
+    if (!pack) return "無圖表資料";
+    const rays = pack.rays || [];
+    const lines = pack.trend_lines || [];
+    const ar = rays.filter((r) => r.type === "AR");
+    const dr = rays.filter((r) => r.type === "DR");
+    const arOn = ar.filter((r) => r.active).length;
+    const drOn = dr.filter((r) => r.active).length;
+    const tlValid = lines.filter((l) => !l.invalidated).length;
+    const bits = [];
+    if (ar.length) bits.push(`AR ${arOn}/${ar.length} 有效`);
+    else bits.push("AR 無");
+    if (dr.length) bits.push(`DR ${drOn}/${dr.length} 有效`);
+    else bits.push("DR 無");
+    bits.push(`趨勢線 ${tlValid}/${lines.length}`);
+    return bits.join(" · ");
+  }
+
+  async function openChart(btn) {
+    const symbol = btn.dataset.symbol || "";
+    const group = btn.dataset.group || "";
+    const name = btn.dataset.name || symbol;
+    const tf = btn.dataset.tf || "1d";
+    const level = btn.dataset.level || "";
+    const type = btn.dataset.type || "";
+    const kind = btn.dataset.kind || "";
+    const source = btn.dataset.source || "";
+    const tvOverride = btn.dataset.tvSymbol || "";
+    const logScale = btn.dataset.logScale === "1";
+    const useTradingView = source === "tradingview" || symbol === "TXF1!";
+    const token = ++openToken;
+    const tvOpts = { tvSymbol: tvOverride, logScale };
+
+    titleEl.textContent = `${symbol} · ${tf === "1d" ? "1D" : tf.toUpperCase()}`;
+    const fromWatchlist = kind === "watchlist";
+
+    modal.hidden = false;
+    modal.setAttribute("aria-hidden", "false");
+    requestAnimationFrame(() => modal.classList.add("open"));
+    document.body.style.overflow = "hidden";
+    destroyChart();
+    showStatus(useTradingView ? "載入 TradingView…" : "載入蠟燭圖…");
+
+    try {
+      if (useTradingView) {
+        if (fromWatchlist) {
+          subEl.innerHTML =
+            `${escapeHtml(name)} · TradingView` +
+            (logScale ? " · <strong>對數座標</strong>" : "") +
+            " · 趨勢線 / AR/DR 請在圖表工具列查看";
+        }
+        if (token !== openToken) return;
+        hideStatus();
+        renderTradingView(group, symbol, tf, tvOpts);
+        return;
+      }
+
+      const pack = await resolvePack(group, symbol, tf);
+      if (fromWatchlist) {
+        subEl.innerHTML =
+          `${escapeHtml(name)} · ${escapeHtml(group)} · ${escapeHtml(ardrSummary(pack))}`;
+      } else {
+        const rayN = pack && pack.rays ? pack.rays.length : 0;
+        const tlN = pack && pack.trend_lines ? pack.trend_lines.length : 0;
+        subEl.innerHTML =
+          `${escapeHtml(name)} · ${escapeHtml(group)} · ${escapeHtml(typeLabel(type, kind))}` +
+          (level ? ` · Level <strong>${escapeHtml(fmtLevel(level))}</strong>` : "") +
+          (pack ? ` · AR/DR ${rayN} · 趨勢線 ${tlN}` : "");
+      }
+
+      if (pack && pack.candles && pack.candles.length) {
+        if (token !== openToken) return;
+        hideStatus();
+        renderPack(pack);
+        return;
+      }
+
+      if (token !== openToken) return;
+      lwcEl.hidden = true;
+      frameEl.hidden = true;
+      showStatus("無法載入此商品圖表，請稍後再試");
+    } catch (err) {
+      if (token !== openToken) return;
+      lwcEl.hidden = true;
+      frameEl.hidden = true;
+      showStatus("圖表載入失敗，請稍後再試");
+    }
+  }
+
+  function escapeHtml(s) {
+    return String(s)
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;");
+  }
+
+  document.addEventListener("click", (ev) => {
+    const btn = ev.target.closest(".sym-btn");
+    if (btn) {
+      ev.preventDefault();
+      openChart(btn);
+      return;
+    }
+    if (ev.target === modal) closeModal();
+  });
+  closeBtn.addEventListener("click", closeModal);
+
+  const CATALOG = window.SYMBOL_CATALOG || [];
+  const GROUP_LABEL = { twse: "上市", tpex: "上櫃" };
+  const fab = document.getElementById("symbolFab");
+  const searchOverlay = document.getElementById("symbolOverlay");
+  const searchInput = document.getElementById("symbolSearch");
+  const searchList = document.getElementById("symbolList");
+  const searchClose = document.getElementById("symbolSearchClose");
+  let searchHi = -1;
+  let searchTimer = null;
+
+  function tfLabel(tf) {
+    return "1D";
+  }
+
+  function openSymbolSearch() {
+    if (!searchOverlay) return;
+    searchOverlay.hidden = false;
+    searchInput.value = "";
+    searchHi = -1;
+    renderSearchList(CATALOG.slice(0, 80), CATALOG.length ? "輸入代碼或名稱篩選…" : "無掃描商品");
+    requestAnimationFrame(() => searchInput.focus());
+  }
+
+  function closeSymbolSearch() {
+    if (!searchOverlay) return;
+    searchOverlay.hidden = true;
+    searchHi = -1;
+    clearTimeout(searchTimer);
+  }
+
+  function filterCatalog(q) {
+    const s = q.trim().toLowerCase();
+    if (!s) return CATALOG.slice(0, 80);
+    return CATALOG.filter((item) => {
+      const hay = [
+        item.symbol,
+        item.name,
+        item.group,
+        GROUP_LABEL[item.group] || item.group,
+        tfLabel(item.timeframe),
+      ].join(" ").toLowerCase();
+      return hay.includes(s);
+    }).slice(0, 80);
+  }
+
+  function renderSearchList(items, emptyMsg) {
+    if (!searchList) return;
+    searchList.innerHTML = "";
+    if (!items.length) {
+      searchList.innerHTML = `<li class="empty">${escapeHtml(emptyMsg)}</li>`;
+      searchHi = -1;
+      return;
+    }
+    searchHi = 0;
+    items.forEach((item, i) => {
+      const li = document.createElement("li");
+      li.dataset.index = String(i);
+      li.className = i === 0 ? "active" : "";
+      const hit = item.hasHit ? '<span class="hit-badge">Hit</span>' : "";
+      li.innerHTML =
+        `<span class="sym">${escapeHtml(item.symbol)}</span>` +
+        `<span class="ex">${escapeHtml(GROUP_LABEL[item.group] || item.group)} · ${escapeHtml(tfLabel(item.timeframe))}</span>` +
+        hit +
+        `<span class="desc">${escapeHtml(item.name || "")}</span>`;
+      li.addEventListener("mousedown", (ev) => {
+        ev.preventDefault();
+        pickCatalogItem(item);
+      });
+      searchList.appendChild(li);
+    });
+  }
+
+  function pickCatalogItem(item) {
+    closeSymbolSearch();
+    const sel = `.sym-btn[data-symbol="${CSS.escape(item.symbol)}"][data-group="${CSS.escape(item.group)}"][data-tf="${CSS.escape(item.timeframe)}"]`;
+    const hitBtn = document.querySelector(sel);
+    if (hitBtn) {
+      hitBtn.scrollIntoView({ behavior: "smooth", block: "center" });
+      hitBtn.classList.add("flash");
+      setTimeout(() => hitBtn.classList.remove("flash"), 1600);
+    }
+    const btn = document.createElement("button");
+    btn.dataset.symbol = item.symbol;
+    btn.dataset.group = item.group;
+    btn.dataset.name = item.name || item.symbol;
+    btn.dataset.tf = item.timeframe;
+    openChart(btn);
+  }
+
+  function scheduleSearch() {
+    clearTimeout(searchTimer);
+    searchTimer = setTimeout(() => {
+      const items = filterCatalog(searchInput.value);
+      renderSearchList(items, "無符合商品");
+    }, 180);
+  }
+
+  if (fab) fab.addEventListener("click", openSymbolSearch);
+  if (searchClose) searchClose.addEventListener("click", closeSymbolSearch);
+  if (searchOverlay) {
+    searchOverlay.addEventListener("mousedown", (ev) => {
+      if (ev.target === searchOverlay) closeSymbolSearch();
+    });
+  }
+  if (searchInput) {
+    searchInput.addEventListener("input", scheduleSearch);
+    searchInput.addEventListener("keydown", (ev) => {
+      const opts = [...(searchList?.querySelectorAll("li[data-index]") || [])];
+      if (ev.key === "ArrowDown" && opts.length) {
+        ev.preventDefault();
+        searchHi = Math.min(searchHi + 1, opts.length - 1);
+        opts.forEach((li, i) => li.classList.toggle("active", i === searchHi));
+        opts[searchHi].scrollIntoView({ block: "nearest" });
+      } else if (ev.key === "ArrowUp" && opts.length) {
+        ev.preventDefault();
+        searchHi = Math.max(searchHi - 1, 0);
+        opts.forEach((li, i) => li.classList.toggle("active", i === searchHi));
+        opts[searchHi].scrollIntoView({ block: "nearest" });
+      } else if (ev.key === "Enter") {
+        const li = opts[searchHi] || opts[0];
+        if (li) li.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
+      }
+    });
+  }
+
+  document.addEventListener("keydown", (ev) => {
+    if (ev.key === "Escape") {
+      if (searchOverlay && !searchOverlay.hidden) {
+        closeSymbolSearch();
+        return;
+      }
+      if (modal.classList.contains("open")) closeModal();
+    }
+  });
+})();
+</script>
