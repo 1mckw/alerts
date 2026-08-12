@@ -1,50 +1,44 @@
 #!/usr/bin/env python3
-"""DJI30 (^DJI) AR/DR + trend-line touch scanner on 1D."""
+"""US indices + DJI30 / NDX100 constituents — AR/DR + trend-line scanner on 1D."""
 
 from __future__ import annotations
 
 import html
 import json
 import os
+import time
 import urllib.parse
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from typing import Any
 
 import ardr
 import trendlines as tl
+from universe import GROUP_ORDER, build_scan_jobs, group_label
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 OUT_DIR = os.path.join(ROOT, "signals")
 STATIC_DIR = os.path.join(ROOT, "static")
 CHART_PACKS_PATH = os.path.join(OUT_DIR, "chart-packs.json")
 
-# Yahoo Finance symbol for Dow Jones Industrial Average (DJI30)
-SYMBOL = "^DJI"
-DISPLAY = "DJI30"
-NAME = "道瓊 30"
-GROUP = "dji"
 TIMEFRAME = "1d"
+BARS = 2000
+CHART_BARS = 800
 
 LOOKBACK = ardr.LOOKBACK
 VOL_LEN = ardr.VOL_LEN
 DROP_PCT = ardr.DROP_PCT
 MIN_STREAK = ardr.MIN_STREAK
 VOL_MULT = ardr.VOL_MULT
-USE_STRUCTURE = ardr.USE_STRUCTURE
 TOUCH_WINDOW_BARS = ardr.TOUCH_WINDOW_BARS
-NEAR_MISS_TOL_PCT = ardr.NEAR_MISS_TOL_PCT
 FRESH_BARS = ardr.FRESH_BARS
-BARS = 2000
-CHART_BARS = 800
 
 detect_signals = ardr.detect_signals
 collect_late_ar_dr_touches = ardr.collect_late_ar_dr_touches
 collect_late_ar_dr_near_misses = ardr.collect_late_ar_dr_near_misses
 fresh_range = ardr.fresh_range
 
-PIVOT_HIGH = tl.PIVOT_HIGH
-PIVOT_LOW = tl.PIVOT_LOW
 TREND_EXCEED_MIN_BARS = tl.TREND_EXCEED_MIN_BARS
 TREND_EXCEED_MAX_BARS = tl.TREND_EXCEED_MAX_BARS
 TREND_EXCEED_BARS = tl.TREND_EXCEED_BARS
@@ -54,7 +48,7 @@ find_trend_touch = tl.find_trend_touch
 find_trend_exceed = tl.find_trend_exceed
 line_end_at_break = tl.line_end_at_break
 
-UA = {"User-Agent": "Mozilla/5.0 (compatible; DJI30-Alerts/1.0)"}
+UA = {"User-Agent": "Mozilla/5.0 (compatible; US-Alerts/1.0)"}
 KIND_ORDER = {"trend_exceed": 0, "ar_dr_touch": 1, "ar_dr_near": 2, "trend_touch": 3}
 
 
@@ -127,6 +121,17 @@ def fetch_yahoo(symbol: str, bars: int = BARS) -> list[dict]:
     if last_err:
         raise last_err
     return []
+
+
+def with_retries(fn, retries: int = 3, pause: float = 0.8):
+    last_err = None
+    for attempt in range(retries):
+        try:
+            return fn()
+        except Exception as exc:  # noqa: BLE001
+            last_err = exc
+            time.sleep(pause * (attempt + 1))
+    raise last_err  # type: ignore[misc]
 
 
 def collect_trend_touches(candles: list[dict], lines: list[dict]) -> list[dict]:
@@ -211,29 +216,47 @@ def build_chart_pack(candles: list[dict], signals: list[dict], lines: list[dict]
     }
 
 
-def scan_one() -> dict:
-    candles = fetch_yahoo(SYMBOL)
-    signals = detect_signals(candles)
-    late = collect_late_ar_dr_touches(candles, signals)
-    near = collect_late_ar_dr_near_misses(candles, signals)
-    lines = build_auto_trend_lines(candles)
-    trend = collect_trend_touches(candles, lines)
-    exceed = collect_trend_exceeds(candles, lines)
-    events = late + near + trend + exceed
-    for ev in events:
-        ev["timeframe"] = TIMEFRAME
-    return {
-        "group": GROUP,
-        "symbol": DISPLAY,
-        "yahoo_symbol": SYMBOL,
-        "name": NAME,
-        "source": "yahoo",
-        "timeframe": TIMEFRAME,
-        "bars": len(candles),
-        "events": events,
-        "error": None,
-        "chart": build_chart_pack(candles, signals, lines),
-    }
+def scan_job(job: dict[str, str]) -> dict:
+    group = job["group"]
+    yahoo = job["yahoo"]
+    symbol = job["symbol"]
+    name = job["name"]
+    try:
+        candles = with_retries(lambda: fetch_yahoo(yahoo))
+        signals = detect_signals(candles)
+        late = collect_late_ar_dr_touches(candles, signals)
+        near = collect_late_ar_dr_near_misses(candles, signals)
+        lines = build_auto_trend_lines(candles)
+        trend = collect_trend_touches(candles, lines)
+        exceed = collect_trend_exceeds(candles, lines)
+        events = late + near + trend + exceed
+        for ev in events:
+            ev["timeframe"] = TIMEFRAME
+        return {
+            "group": group,
+            "symbol": symbol,
+            "yahoo_symbol": yahoo,
+            "name": name,
+            "source": "yahoo",
+            "timeframe": TIMEFRAME,
+            "bars": len(candles),
+            "events": events,
+            "error": None,
+            "chart": build_chart_pack(candles, signals, lines),
+        }
+    except Exception as exc:  # noqa: BLE001
+        return {
+            "group": group,
+            "symbol": symbol,
+            "yahoo_symbol": yahoo,
+            "name": name,
+            "source": "yahoo",
+            "timeframe": TIMEFRAME,
+            "bars": 0,
+            "events": [],
+            "error": str(exc),
+            "chart": None,
+        }
 
 
 def fmt_ts(ts: int) -> str:
@@ -249,6 +272,33 @@ def read_static(name: str) -> str:
         return f.read()
 
 
+def build_symbol_catalog(results: list[dict], charts: dict) -> list[dict]:
+    catalog = []
+    for r in results:
+        if r.get("error"):
+            continue
+        g, sym, tf = r["group"], r["symbol"], r.get("timeframe") or TIMEFRAME
+        ck = chart_key(g, sym, tf)
+        catalog.append(
+            {
+                "group": g,
+                "symbol": sym,
+                "name": r.get("name") or sym,
+                "timeframe": tf,
+                "hasHit": bool(r.get("events")),
+                "hasChart": ck in charts,
+            }
+        )
+    catalog.sort(
+        key=lambda x: (
+            not x["hasHit"],
+            GROUP_ORDER.get(x["group"], 99),
+            x["symbol"],
+        )
+    )
+    return catalog
+
+
 def render_html(payload: dict) -> str:
     hits = payload["hits"]
     ar_dr = [h for h in hits if h["kind"] == "ar_dr_touch"]
@@ -256,24 +306,31 @@ def render_html(payload: dict) -> str:
     trend = [h for h in hits if h["kind"] == "trend_touch"]
     exceed = [h for h in hits if h["kind"] == "trend_exceed"]
     c = payload["counts"]
-    charts = payload.get("charts") or {}
-    ck = chart_key(GROUP, DISPLAY, TIMEFRAME)
-    chart_pack = charts.get(ck, {})
+    u = payload["universe"]
+    gen = html.escape(payload["generated_at"])
 
     def sym_btn(h: dict) -> str:
+        sym = str(h.get("symbol", ""))
+        grp = str(h.get("group", ""))
+        name = str(h.get("name", sym))
         attrs = (
-            f'data-symbol="{html.escape(DISPLAY, quote=True)}" '
-            f'data-group="{html.escape(GROUP, quote=True)}" '
-            f'data-name="{html.escape(NAME, quote=True)}" '
-            f'data-tf="1d" data-level="{html.escape(str(h.get("level", "")), quote=True)}" '
+            f'data-symbol="{html.escape(sym, quote=True)}" '
+            f'data-group="{html.escape(grp, quote=True)}" '
+            f'data-name="{html.escape(name, quote=True)}" '
+            f'data-tf="1d" '
+            f'data-level="{html.escape(str(h.get("level", "")), quote=True)}" '
             f'data-type="{html.escape(str(h.get("type", "")), quote=True)}" '
             f'data-kind="{html.escape(str(h.get("kind", "")), quote=True)}" '
             f'data-time="{html.escape(str(h.get("time", "")), quote=True)}"'
         )
         return (
             f'<button type="button" class="sym-btn" {attrs} title="開啟蠟燭圖">'
-            f"<code>{html.escape(DISPLAY)}</code></button>"
+            f"<code>{html.escape(sym)}</code></button>"
         )
+
+    def pool_cell(h: dict) -> str:
+        g = h.get("group", "")
+        return html.escape(group_label(str(g)))
 
     def rows(items: list[dict], empty: str, cols: int, builder) -> str:
         if not items:
@@ -283,10 +340,12 @@ def render_html(payload: dict) -> str:
     def row_ar_dr(h: dict) -> str:
         cls = "ar" if h.get("type") == "AR" else "dr"
         return (
-            f"<tr>"
+            f'<tr data-symbol="{html.escape(str(h.get("symbol","")), quote=True)}" '
+            f'data-group="{html.escape(str(h.get("group","")), quote=True)}">'
             f'<td><span class="tag {cls}">{html.escape(str(h.get("type", "")))}</span></td>'
+            f"<td>{pool_cell(h)}</td>"
             f"<td>{sym_btn(h)}</td>"
-            f"<td>{html.escape(h.get('name', NAME))}</td>"
+            f"<td>{html.escape(h.get('name', ''))}</td>"
             f'<td class="num">{fmt_num(float(h["level"]))}</td>'
             f'<td class="num">{int(h.get("bars_after_signal", 0))}</td>'
             f"<td>{html.escape(fmt_ts(int(h['time'])))}</td>"
@@ -296,10 +355,12 @@ def render_html(payload: dict) -> str:
     def row_ar_near(h: dict) -> str:
         cls = "ar" if h.get("type") == "AR" else "dr"
         return (
-            f"<tr>"
+            f'<tr data-symbol="{html.escape(str(h.get("symbol","")), quote=True)}" '
+            f'data-group="{html.escape(str(h.get("group","")), quote=True)}">'
             f'<td><span class="tag {cls}">{html.escape(str(h.get("type", "")))}</span></td>'
+            f"<td>{pool_cell(h)}</td>"
             f"<td>{sym_btn(h)}</td>"
-            f"<td>{html.escape(h.get('name', NAME))}</td>"
+            f"<td>{html.escape(h.get('name', ''))}</td>"
             f'<td class="num">{fmt_num(float(h["level"]))}</td>'
             f'<td class="num">{float(h.get("gap_pct", 0)):.3g}%</td>'
             f'<td class="num">{int(h.get("bars_after_signal", 0))}</td>'
@@ -310,10 +371,12 @@ def render_html(payload: dict) -> str:
     def row_trend(h: dict) -> str:
         cls = "resist" if h.get("type") == "resistance" else "support"
         return (
-            f"<tr>"
+            f'<tr data-symbol="{html.escape(str(h.get("symbol","")), quote=True)}" '
+            f'data-group="{html.escape(str(h.get("group","")), quote=True)}">'
             f'<td><span class="tag {cls}">{html.escape(str(h.get("type", "")))}</span></td>'
+            f"<td>{pool_cell(h)}</td>"
             f"<td>{sym_btn(h)}</td>"
-            f"<td>{html.escape(h.get('name', NAME))}</td>"
+            f"<td>{html.escape(h.get('name', ''))}</td>"
             f'<td class="num">{fmt_num(float(h["level"]))}</td>'
             f"<td>{html.escape(fmt_ts(int(h['time'])))}</td>"
             "</tr>"
@@ -322,37 +385,27 @@ def render_html(payload: dict) -> str:
     def row_exceed(h: dict) -> str:
         cls = "resist" if h.get("type") == "resistance" else "support"
         return (
-            f"<tr>"
+            f'<tr data-symbol="{html.escape(str(h.get("symbol","")), quote=True)}" '
+            f'data-group="{html.escape(str(h.get("group","")), quote=True)}">'
             f'<td><span class="tag {cls}">{html.escape(str(h.get("type", "")))}</span></td>'
+            f"<td>{pool_cell(h)}</td>"
             f"<td>{sym_btn(h)}</td>"
-            f"<td>{html.escape(h.get('name', NAME))}</td>"
+            f"<td>{html.escape(h.get('name', ''))}</td>"
             f'<td class="num">{fmt_num(float(h["level"]))}</td>'
             f'<td class="num">{int(h.get("exceed_bars", TREND_EXCEED_BARS))}</td>'
             f"<td>{html.escape(fmt_ts(int(h['time'])))}</td>"
             "</tr>"
         )
 
-    gen = html.escape(payload["generated_at"])
+    catalog = build_symbol_catalog(payload.get("results") or [], payload.get("charts") or {})
     embed_js = (
-        "<script>window.CHART_PACKS = "
-        + json.dumps({ck: chart_pack}, ensure_ascii=False, separators=(",", ":"))
-        + ";window.SYMBOL_CATALOG = "
-        + json.dumps(
-            [
-                {
-                    "group": GROUP,
-                    "symbol": DISPLAY,
-                    "name": NAME,
-                    "timeframe": TIMEFRAME,
-                    "hasHit": bool(hits),
-                    "hasChart": bool(chart_pack.get("candles")),
-                }
-            ],
-            ensure_ascii=False,
-            separators=(",", ":"),
-        )
+        "<script>window.CHART_PACKS = {};"
+        + "window.SYMBOL_CATALOG = "
+        + json.dumps(catalog, ensure_ascii=False, separators=(",", ":"))
         + ";window.WATCHLISTS = {};</script>\n"
     )
+
+    filter_script = read_static("report-pool-filter.html")
 
     return f"""<!DOCTYPE html>
 <html lang="zh-Hant">
@@ -360,7 +413,7 @@ def render_html(payload: dict) -> str:
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <meta http-equiv="refresh" content="3600" />
-  <title>DJI30 Touch Alerts</title>
+  <title>US Touch Alerts</title>
   <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet" />
   <style>
     :root {{
@@ -373,17 +426,26 @@ def render_html(payload: dict) -> str:
       font-family: "Space Grotesk", system-ui, sans-serif;
       background: #000; color: var(--text); min-height: 100vh; padding: 28px 18px 48px;
     }}
-    .wrap {{ max-width: 960px; margin: 0 auto; }}
+    .wrap {{ max-width: 1100px; margin: 0 auto; }}
     h1 {{ font-size: 1.5rem; color: var(--primary); }}
-    .meta {{ color: var(--muted); font-size: .9rem; margin: 8px 0 18px; }}
-    .cards {{ display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-bottom: 22px; }}
-    @media (max-width: 720px) {{ .cards {{ grid-template-columns: 1fr 1fr; }} }}
+    .meta {{ color: var(--muted); font-size: .9rem; margin: 8px 0 18px; line-height: 1.5; }}
+    .cards {{ display: grid; grid-template-columns: repeat(5, 1fr); gap: 10px; margin-bottom: 16px; }}
+    @media (max-width: 900px) {{ .cards {{ grid-template-columns: repeat(2, 1fr); }} }}
     .card {{ background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 12px 14px; }}
     .card .lbl {{ font-size: .65rem; color: var(--muted); text-transform: uppercase; }}
-    .card .val {{ font-family: "JetBrains Mono", monospace; font-size: 1.2rem; font-weight: 700; margin-top: 4px; }}
+    .card .val {{ font-family: "JetBrains Mono", monospace; font-size: 1.15rem; font-weight: 700; margin-top: 4px; }}
+    .pool-filters {{ display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 18px; }}
+    .pool-filters button {{
+      font: inherit; cursor: pointer; height: 30px; padding: 0 12px; border-radius: 999px;
+      border: 1px solid var(--border); background: rgba(6,10,18,.55); color: var(--muted); font-size: .78rem;
+    }}
+    .pool-filters button.active {{
+      color: #04110e; border-color: transparent;
+      background: linear-gradient(135deg, #00f0c8, #00b894);
+    }}
     h2 {{ font-size: 1.05rem; margin: 22px 0 10px; }}
-    .panel {{ background: var(--panel); border: 1px solid var(--border); border-radius: 14px; overflow: hidden; }}
-    table {{ width: 100%; border-collapse: collapse; font-size: .84rem; }}
+    .panel {{ background: var(--panel); border: 1px solid var(--border); border-radius: 14px; overflow: hidden; overflow-x: auto; }}
+    table {{ width: 100%; border-collapse: collapse; font-size: .84rem; min-width: 640px; }}
     th, td {{ padding: 9px 12px; text-align: left; border-bottom: 1px solid rgba(0,240,200,.08); }}
     th {{ color: var(--muted); font-size: .68rem; text-transform: uppercase; }}
     td.num, th.num {{ text-align: right; font-family: "JetBrains Mono", monospace; }}
@@ -398,11 +460,25 @@ def render_html(payload: dict) -> str:
     .sym-btn:hover code {{ text-decoration: underline; }}
     footer {{ margin-top: 28px; color: var(--muted); font-size: .75rem; }}
     a {{ color: var(--primary); }}
-    .chart-cta {{
-      display: inline-flex; align-items: center; gap: 8px; margin: 12px 0 20px;
-      padding: 10px 16px; border-radius: 10px; border: 1px solid var(--border);
-      background: rgba(0,240,200,.06); color: var(--primary); cursor: pointer; font: inherit;
+    .search-fab {{
+      position: fixed; right: 18px; bottom: 22px; z-index: 70;
+      display: flex; align-items: center; gap: 10px; padding: 12px 16px; border-radius: 14px;
+      border: 1px solid var(--border); background: rgba(6,10,18,.85); color: var(--text); cursor: pointer; font: inherit;
     }}
+    .search-overlay {{
+      position: fixed; inset: 0; z-index: 85; background: rgba(0,0,0,.62);
+      display: flex; align-items: flex-start; justify-content: center; padding: 10vh 16px;
+    }}
+    .search-overlay[hidden] {{ display: none !important; }}
+    .search-modal {{
+      width: min(520px, 100%); max-height: 70vh; background: rgba(8,12,20,.95);
+      border: 1px solid var(--border); border-radius: 16px; display: flex; flex-direction: column; overflow: hidden;
+    }}
+    .search-modal-head {{ display: flex; gap: 8px; padding: 14px; border-bottom: 1px solid var(--border); }}
+    #symbolSearch {{ flex: 1; height: 42px; padding: 8px 14px; border-radius: 10px; border: 1px solid var(--border); background: #0a0e14; color: var(--text); font-family: "JetBrains Mono", monospace; }}
+    #symbolList {{ list-style: none; margin: 0; padding: 8px; overflow-y: auto; flex: 1; }}
+    #symbolList li {{ padding: 10px 12px; border-radius: 10px; cursor: pointer; }}
+    #symbolList li:hover {{ background: rgba(0,240,200,.06); }}
     .modal {{
       position: fixed; inset: 0; z-index: 80; display: flex; align-items: center; justify-content: center;
       padding: 16px; background: rgba(0,0,0,.62); opacity: 0; pointer-events: none; transition: opacity .2s;
@@ -422,46 +498,59 @@ def render_html(payload: dict) -> str:
 </head>
 <body>
   <div class="wrap">
-    <h1>DJI30 · AR/DR &amp; 趨勢線 Alerts</h1>
-    <p class="meta">商品 <strong>{html.escape(DISPLAY)}</strong>（Yahoo <code>{html.escape(SYMBOL)}</code>）· 週期 <strong>1D</strong> · 更新 {gen}</p>
+    <h1>US · AR/DR &amp; 趨勢線 Alerts</h1>
+    <p class="meta">
+      商品池 <strong>DJI30</strong> + <strong>NDX100</strong> 指數及成分股 · 週期 <strong>1D</strong> ·
+      掃描 {u['total']} 檔（指數 {u['indices']} · DJI30 {u['dji']} · NDX100 {u['ndx']}）· 更新 {gen}
+    </p>
     <div class="cards">
+      <div class="card"><div class="lbl">掃描 OK</div><div class="val">{c['ok']}/{c['jobs']}</div></div>
       <div class="card"><div class="lbl">AR/DR 觸碰</div><div class="val">{c['ar_dr_touch']}</div></div>
       <div class="card"><div class="lbl">AR/DR 接近</div><div class="val">{c['ar_dr_near']}</div></div>
       <div class="card"><div class="lbl">趨勢線觸碰</div><div class="val">{c['trend_touch']}</div></div>
       <div class="card"><div class="lbl">趨勢線超出</div><div class="val">{c['trend_exceed']}</div></div>
     </div>
-    <button type="button" class="chart-cta sym-btn"
-      data-symbol="{html.escape(DISPLAY, quote=True)}"
-      data-group="{html.escape(GROUP, quote=True)}"
-      data-name="{html.escape(NAME, quote=True)}"
-      data-tf="1d" data-kind="manual" data-type="" data-level="">
-      開啟 DJI30 圖表（AR/DR 射線 + 趨勢線）
-    </button>
+    <div class="pool-filters" id="poolFilters">
+      <button type="button" data-pool="all" class="active">全部</button>
+      <button type="button" data-pool="index">指數</button>
+      <button type="button" data-pool="dji">DJI30 成分</button>
+      <button type="button" data-pool="ndx">NDX100 成分</button>
+    </div>
 
     <h2>趨勢線超出（最新 {TREND_EXCEED_MIN_BARS}–{TREND_EXCEED_MAX_BARS} 根）</h2>
     <div class="panel"><table><thead><tr>
-      <th>類型</th><th>代碼</th><th>名稱</th><th class="num">價位</th><th class="num">根數</th><th>時間</th>
-    </tr></thead><tbody>{rows(exceed, "目前無超出信號", 6, row_exceed)}</tbody></table></div>
+      <th>類型</th><th>池</th><th>代碼</th><th>名稱</th><th class="num">價位</th><th class="num">根數</th><th>時間</th>
+    </tr></thead><tbody data-section="exceed">{rows(exceed, "目前無超出信號", 7, row_exceed)}</tbody></table></div>
 
     <h2>AR / DR 觸碰（&gt;{TOUCH_WINDOW_BARS} 根後）</h2>
     <div class="panel"><table><thead><tr>
-      <th>類型</th><th>代碼</th><th>名稱</th><th class="num">價位</th><th class="num">根數</th><th>時間</th>
-    </tr></thead><tbody>{rows(ar_dr, "目前無 AR/DR 觸碰", 6, row_ar_dr)}</tbody></table></div>
+      <th>類型</th><th>池</th><th>代碼</th><th>名稱</th><th class="num">價位</th><th class="num">根數</th><th>時間</th>
+    </tr></thead><tbody data-section="ar_dr">{rows(ar_dr, "目前無 AR/DR 觸碰", 7, row_ar_dr)}</tbody></table></div>
 
     <h2>AR / DR 接近未觸</h2>
     <div class="panel"><table><thead><tr>
-      <th>類型</th><th>代碼</th><th>名稱</th><th class="num">價位</th><th class="num">差距</th><th class="num">根數</th><th>時間</th>
-    </tr></thead><tbody>{rows(ar_near, f"目前無接近未觸（&gt;{TOUCH_WINDOW_BARS} 根後）", 7, row_ar_near)}</tbody></table></div>
+      <th>類型</th><th>池</th><th>代碼</th><th>名稱</th><th class="num">價位</th><th class="num">差距</th><th class="num">根數</th><th>時間</th>
+    </tr></thead><tbody data-section="ar_near">{rows(ar_near, f"目前無接近未觸（&gt;{TOUCH_WINDOW_BARS} 根後）", 8, row_ar_near)}</tbody></table></div>
 
     <h2>趨勢線觸碰</h2>
     <div class="panel"><table><thead><tr>
-      <th>類型</th><th>代碼</th><th>名稱</th><th class="num">價位</th><th>時間</th>
-    </tr></thead><tbody>{rows(trend, "目前無趨勢線觸碰", 5, row_trend)}</tbody></table></div>
+      <th>類型</th><th>池</th><th>代碼</th><th>名稱</th><th class="num">價位</th><th>時間</th>
+    </tr></thead><tbody data-section="trend">{rows(trend, "目前無趨勢線觸碰", 6, row_trend)}</tbody></table></div>
 
-    <footer>
-      每小時自動更新 · GitHub Pages ·
-      <a href="latest.json">latest.json</a>
-    </footer>
+    <footer>每小時自動更新 · <a href="latest.json">latest.json</a></footer>
+  </div>
+
+  <button type="button" class="search-fab" id="searchFab" aria-label="搜尋商品">
+    <span>🔍</span><span>搜尋商品</span>
+  </button>
+  <div class="search-overlay" id="symbolOverlay" hidden>
+    <div class="search-modal">
+      <div class="search-modal-head">
+        <input id="symbolSearch" type="search" placeholder="代碼或名稱…" autocomplete="off" />
+        <button type="button" id="symbolSearchClose">關閉</button>
+      </div>
+      <ul id="symbolList"></ul>
+    </div>
   </div>
 
   <div id="chart-modal" class="modal" hidden aria-hidden="true">
@@ -480,7 +569,7 @@ def render_html(payload: dict) -> str:
       </div>
     </div>
   </div>
-{embed_js}{read_static("report-chart-modal.html")}
+{embed_js}{filter_script}{read_static("report-chart-modal.html")}
 </body>
 </html>
 """
@@ -488,48 +577,57 @@ def render_html(payload: dict) -> str:
 
 def main() -> int:
     os.makedirs(OUT_DIR, exist_ok=True)
-    print(f"Scanning {DISPLAY} ({SYMBOL}) 1D…", flush=True)
-    try:
-        result = scan_one()
-    except Exception as exc:  # noqa: BLE001
-        print(f"Scan failed: {exc}", flush=True)
-        result = {
-            "group": GROUP,
-            "symbol": DISPLAY,
-            "yahoo_symbol": SYMBOL,
-            "name": NAME,
-            "source": "yahoo",
-            "timeframe": TIMEFRAME,
-            "bars": 0,
-            "events": [],
-            "error": str(exc),
-        }
+    jobs = build_scan_jobs()
+    indices_n = sum(1 for j in jobs if j["group"] == "index")
+    dji_n = sum(1 for j in jobs if j["group"] == "dji")
+    ndx_n = sum(1 for j in jobs if j["group"] == "ndx")
+    print(f"Scanning {len(jobs)} jobs (index={indices_n} dji={dji_n} ndx={ndx_n})…", flush=True)
 
-    hits = []
+    results: list[dict] = []
+    workers = 10 if os.environ.get("GITHUB_ACTIONS") else 8
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        futs = {pool.submit(scan_job, j): j for j in jobs}
+        done = 0
+        for fut in as_completed(futs):
+            results.append(fut.result())
+            done += 1
+            if done % 20 == 0:
+                print(f"  progress {done}/{len(jobs)}", flush=True)
+
+    hits: list[dict] = []
     charts: dict[str, dict] = {}
-    pack = result.pop("chart", None)
-    if pack and not result.get("error"):
-        key = chart_key(GROUP, DISPLAY, TIMEFRAME)
-        charts[key] = pack
-    for ev in result.get("events") or []:
-        hits.append(
-            {
-                **ev,
-                "group": GROUP,
-                "symbol": DISPLAY,
-                "name": NAME,
-                "timeframe": TIMEFRAME,
-            }
-        )
-    hits.sort(key=lambda x: KIND_ORDER.get(x["kind"], 99))
+    slim_results: list[dict] = []
 
+    for r in results:
+        pack = r.pop("chart", None)
+        g, sym = r["group"], r["symbol"]
+        key = chart_key(g, sym, TIMEFRAME)
+        if pack and not r.get("error"):
+            # Keep chart for indices, hits, or catalog browsing (all successful scans)
+            charts[key] = pack
+        slim_results.append({k: v for k, v in r.items() if k != "chart"})
+        for ev in r.get("events") or []:
+            hits.append({**ev, "group": g, "symbol": sym, "name": r.get("name"), "timeframe": TIMEFRAME})
+
+    hits.sort(
+        key=lambda x: (
+            KIND_ORDER.get(x["kind"], 99),
+            GROUP_ORDER.get(x.get("group", ""), 99),
+            x["symbol"],
+        )
+    )
+
+    ok = sum(1 for r in slim_results if not r.get("error"))
     generated_at = datetime.now(tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
     payload = {
         "generated_at": generated_at,
-        "symbol": DISPLAY,
-        "yahoo_symbol": SYMBOL,
-        "name": NAME,
         "timeframe": TIMEFRAME,
+        "universe": {
+            "total": len(jobs),
+            "indices": indices_n,
+            "dji": dji_n,
+            "ndx": ndx_n,
+        },
         "params": {
             "bars": BARS,
             "touch_window_bars": TOUCH_WINDOW_BARS,
@@ -538,6 +636,9 @@ def main() -> int:
             "vol_mult": VOL_MULT,
         },
         "counts": {
+            "jobs": len(jobs),
+            "ok": ok,
+            "errors": len(jobs) - ok,
             "ar_dr_touch": sum(1 for h in hits if h["kind"] == "ar_dr_touch"),
             "ar_dr_near": sum(1 for h in hits if h["kind"] == "ar_dr_near"),
             "trend_touch": sum(1 for h in hits if h["kind"] == "trend_touch"),
@@ -545,33 +646,34 @@ def main() -> int:
             "hits": len(hits),
         },
         "hits": hits,
-        "results": [result],
+        "results": slim_results,
         "charts": charts,
-        "error": result.get("error"),
     }
 
     with open(os.path.join(OUT_DIR, "latest.json"), "w", encoding="utf-8") as f:
-        json.dump(payload, f, ensure_ascii=False, indent=2)
+        json.dump({k: v for k, v in payload.items() if k != "charts"}, f, ensure_ascii=False, indent=2)
 
-    chart_payload = {
-        "generated_at": generated_at,
-        "group": GROUP,
-        "symbol": DISPLAY,
-        "charts": charts,
-    }
     with open(CHART_PACKS_PATH, "w", encoding="utf-8") as f:
-        json.dump(chart_payload, f, ensure_ascii=False, separators=(",", ":"))
+        json.dump(
+            {"generated_at": generated_at, "charts": charts},
+            f,
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
 
     page = render_html(payload)
     for name in ("latest.html", "index.html"):
         with open(os.path.join(OUT_DIR, name), "w", encoding="utf-8") as f:
             f.write(page)
 
-    print(f"Hits: {len(hits)} · bars: {result.get('bars', 0)}", flush=True)
-    if result.get("error"):
-        print(f"Error: {result['error']}", flush=True)
-        return 1
-    return 0
+    errs = [r for r in slim_results if r.get("error")]
+    if errs:
+        print(f"Errors ({len(errs)}):", flush=True)
+        for e in errs[:8]:
+            print(f"  {e['symbol']} ({e['yahoo_symbol']}): {e['error']}", flush=True)
+
+    print(f"Hits: {len(hits)} · OK: {ok}/{len(jobs)}", flush=True)
+    return 0 if ok > 0 else 1
 
 
 if __name__ == "__main__":

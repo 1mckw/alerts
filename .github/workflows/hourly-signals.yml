@@ -1,4 +1,4 @@
-name: Hourly DJI30 Alerts
+name: Hourly US Alerts (DJI30 + NDX100)
 
 on:
   schedule:
@@ -9,6 +9,7 @@ on:
     paths:
       - ".github/workflows/hourly-signals.yml"
       - "scan_signals.py"
+      - "universe.py"
       - "static/**"
       - "ardr.py"
       - "trendlines.py"
@@ -19,13 +20,13 @@ permissions:
   id-token: write
 
 concurrency:
-  group: hourly-dji30-alerts
+  group: hourly-us-alerts
   cancel-in-progress: true
 
 jobs:
   scan:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 45
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -38,7 +39,7 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Scan DJI30
+      - name: Scan DJI30 + NDX100 universe
         if: github.event_name != 'push'
         env:
           PYTHONUNBUFFERED: "1"
@@ -53,7 +54,7 @@ jobs:
             echo "No signal file changes"
             exit 0
           fi
-          git commit -m "chore: update DJI30 hourly touch alerts"
+          git commit -m "chore: update US hourly touch alerts (DJI30 + NDX100)"
           git pull --rebase origin main || true
           git push origin main
         env:

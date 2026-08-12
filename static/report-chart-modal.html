@@ -72,8 +72,10 @@
 
   function tvSymbol(group, symbol, tvOverride) {
     if (tvOverride) return tvOverride;
-    if (group === "dji") return "DJI";
-    if (group === "twse") return "TWSE:" + symbol.replace(".TW", "");
+    if (group === "dji") return "NYSE:" + symbol;
+    if (group === "ndx") return "NASDAQ:" + symbol;
+    if (group === "index" && symbol === "DJI30") return "DJI";
+    if (group === "index" && symbol === "NDX100") return "NASDAQ:NDX";
     if (group === "tpex") return "TPEX:" + symbol.replace(".TWO", "");
     if (symbol === "TXF1!" || symbol.endsWith("TXF1!")) return "TAIFEX:TXF1!";
     return symbol;
@@ -395,7 +397,7 @@
   closeBtn.addEventListener("click", closeModal);
 
   const CATALOG = window.SYMBOL_CATALOG || [];
-  const GROUP_LABEL = { twse: "上市", tpex: "上櫃" };
+  const GROUP_LABEL = { index: "指數", dji: "DJI30", ndx: "NDX100", twse: "上市", tpex: "上櫃" };
   const fab = document.getElementById("symbolFab");
   const searchOverlay = document.getElementById("symbolOverlay");
   const searchInput = document.getElementById("symbolSearch");
@@ -518,6 +520,17 @@
       }
     });
   }
+
+  document.addEventListener("open-symbol-chart", (ev) => {
+    const d = ev.detail || {};
+    const fake = document.createElement("button");
+    fake.className = "sym-btn";
+    fake.dataset.symbol = d.symbol || "";
+    fake.dataset.group = d.group || "";
+    fake.dataset.name = d.name || d.symbol || "";
+    fake.dataset.tf = d.tf || "1d";
+    openChart(fake);
+  });
 
   document.addEventListener("keydown", (ev) => {
     if (ev.key === "Escape") {

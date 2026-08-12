@@ -1,0 +1,102 @@
+<script>
+(function () {
+  const bar = document.getElementById("poolFilters");
+  if (!bar) return;
+  const KEY = "us_alerts_pool_filter";
+  let current = "all";
+  try {
+    const saved = localStorage.getItem(KEY);
+    if (saved) current = saved;
+  } catch (_) {}
+
+  function apply(pool) {
+    current = pool;
+    try { localStorage.setItem(KEY, pool); } catch (_) {}
+    bar.querySelectorAll("button[data-pool]").forEach((btn) => {
+      btn.classList.toggle("active", btn.dataset.pool === pool);
+    });
+    document.querySelectorAll("tbody[data-section] tr[data-group]").forEach((tr) => {
+      const g = tr.dataset.group || "";
+      const on = pool === "all" || g === pool;
+      tr.hidden = !on;
+    });
+  }
+
+  bar.addEventListener("click", (ev) => {
+    const btn = ev.target.closest("button[data-pool]");
+    if (!btn) return;
+    apply(btn.dataset.pool || "all");
+  });
+
+  apply(current);
+})();
+</script>
+<script>
+(function () {
+  const catalog = window.SYMBOL_CATALOG || [];
+  const fab = document.getElementById("searchFab");
+  const overlay = document.getElementById("symbolOverlay");
+  const input = document.getElementById("symbolSearch");
+  const list = document.getElementById("symbolList");
+  const closeBtn = document.getElementById("symbolSearchClose");
+  if (!fab || !overlay || !input || !list) return;
+
+  function openSearch() {
+    overlay.hidden = false;
+    input.value = "";
+    render("");
+    input.focus();
+  }
+  function closeSearch() {
+    overlay.hidden = true;
+  }
+  function render(q) {
+    const qq = q.trim().toLowerCase();
+    const items = catalog.filter((x) => {
+      if (!qq) return true;
+      return (
+        String(x.symbol).toLowerCase().includes(qq) ||
+        String(x.name).toLowerCase().includes(qq) ||
+        String(x.group).toLowerCase().includes(qq)
+      );
+    }).slice(0, 80);
+    if (!items.length) {
+      list.innerHTML = '<li class="empty">無符合商品</li>';
+      return;
+    }
+    list.innerHTML = items
+      .map((x) => {
+        const pool = { index: "指數", dji: "DJI30", ndx: "NDX100" }[x.group] || x.group;
+        const hit = x.hasHit ? " · 有信號" : "";
+        return (
+          `<li data-symbol="${x.symbol}" data-group="${x.group}" data-name="${x.name}" data-tf="${x.timeframe}">` +
+          `<span class="sym">${x.symbol}</span> ${x.name} <small>(${pool}${hit})</small></li>`
+        );
+      })
+      .join("");
+  }
+
+  fab.addEventListener("click", openSearch);
+  closeBtn.addEventListener("click", closeSearch);
+  overlay.addEventListener("click", (ev) => { if (ev.target === overlay) closeSearch(); });
+  input.addEventListener("input", () => render(input.value));
+  list.addEventListener("click", (ev) => {
+    const li = ev.target.closest("li[data-symbol]");
+    if (!li) return;
+    closeSearch();
+    document.dispatchEvent(
+      new CustomEvent("open-symbol-chart", {
+        detail: {
+          symbol: li.dataset.symbol,
+          group: li.dataset.group,
+          name: li.dataset.name,
+          tf: li.dataset.tf || "1d",
+        },
+      })
+    );
+  });
+  document.addEventListener("keydown", (ev) => {
+    if (ev.key === "Escape" && !overlay.hidden) closeSearch();
+  });
+})();
+</script>
