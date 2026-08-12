@@ -1,34 +1,58 @@
 <script>
 (function () {
-  const bar = document.getElementById("poolFilters");
-  if (!bar) return;
-  const KEY = "us_alerts_pool_filter";
-  let current = "all";
+  const poolBar = document.getElementById("poolFilters");
+  const tfBar = document.getElementById("tfFilters");
+  const POOL_KEY = "us_alerts_pool_filter";
+  const TF_KEY = "us_alerts_tf_filter";
+  let pool = "all";
+  let tf = "all";
   try {
-    const saved = localStorage.getItem(KEY);
-    if (saved) current = saved;
+    const savedPool = localStorage.getItem(POOL_KEY);
+    if (savedPool) pool = savedPool;
+    const savedTf = localStorage.getItem(TF_KEY);
+    if (savedTf) tf = savedTf;
   } catch (_) {}
 
-  function apply(pool) {
-    current = pool;
-    try { localStorage.setItem(KEY, pool); } catch (_) {}
-    bar.querySelectorAll("button[data-pool]").forEach((btn) => {
-      btn.classList.toggle("active", btn.dataset.pool === pool);
-    });
+  function applyFilters() {
+    if (poolBar) {
+      poolBar.querySelectorAll("button[data-pool]").forEach((btn) => {
+        btn.classList.toggle("active", btn.dataset.pool === pool);
+      });
+    }
+    if (tfBar) {
+      tfBar.querySelectorAll("button[data-tf]").forEach((btn) => {
+        btn.classList.toggle("active", btn.dataset.tf === tf);
+      });
+    }
     document.querySelectorAll("tbody[data-section] tr[data-group]").forEach((tr) => {
       const g = tr.dataset.group || "";
-      const on = pool === "all" || g === pool;
-      tr.hidden = !on;
+      const t = tr.dataset.timeframe || "";
+      const poolOk = pool === "all" || g === pool;
+      const tfOk = tf === "all" || t === tf;
+      tr.hidden = !(poolOk && tfOk);
     });
   }
 
-  bar.addEventListener("click", (ev) => {
-    const btn = ev.target.closest("button[data-pool]");
-    if (!btn) return;
-    apply(btn.dataset.pool || "all");
-  });
+  if (poolBar) {
+    poolBar.addEventListener("click", (ev) => {
+      const btn = ev.target.closest("button[data-pool]");
+      if (!btn) return;
+      pool = btn.dataset.pool || "all";
+      try { localStorage.setItem(POOL_KEY, pool); } catch (_) {}
+      applyFilters();
+    });
+  }
+  if (tfBar) {
+    tfBar.addEventListener("click", (ev) => {
+      const btn = ev.target.closest("button[data-tf]");
+      if (!btn) return;
+      tf = btn.dataset.tf || "all";
+      try { localStorage.setItem(TF_KEY, tf); } catch (_) {}
+      applyFilters();
+    });
+  }
 
-  apply(current);
+  applyFilters();
 })();
 </script>
 <script>
@@ -57,7 +81,8 @@
       return (
         String(x.symbol).toLowerCase().includes(qq) ||
         String(x.name).toLowerCase().includes(qq) ||
-        String(x.group).toLowerCase().includes(qq)
+        String(x.group).toLowerCase().includes(qq) ||
+        String(x.timeframe).toLowerCase().includes(qq)
       );
     }).slice(0, 80);
     if (!items.length) {
@@ -67,10 +92,11 @@
     list.innerHTML = items
       .map((x) => {
         const pool = { index: "指數", dji: "DJI30", ndx: "NDX100" }[x.group] || x.group;
+        const tf = String(x.timeframe || "1d").toUpperCase();
         const hit = x.hasHit ? " · 有信號" : "";
         return (
           `<li data-symbol="${x.symbol}" data-group="${x.group}" data-name="${x.name}" data-tf="${x.timeframe}">` +
-          `<span class="sym">${x.symbol}</span> ${x.name} <small>(${pool}${hit})</small></li>`
+          `<span class="sym">${x.symbol}</span> ${x.name} <small>(${pool} · ${tf}${hit})</small></li>`
         );
       })
       .join("");

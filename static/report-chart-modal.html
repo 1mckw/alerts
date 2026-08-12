@@ -106,7 +106,9 @@
   }
 
   function tvInterval(tf) {
-    return tf === "1d" ? "D" : "60";
+    if (tf === "1d") return "D";
+    if (tf === "4h") return "240";
+    return "60";
   }
 
   function fmtLevel(v) {
@@ -181,12 +183,7 @@
     return active ? `rgba(${rgb},1)` : `rgba(${rgb},0.35)`;
   }
 
-  function markerColor(type, active) {
-    if (type === "AR") return active ? "#00e896" : "rgba(0,232,150,0.35)";
-    return active ? "#ff4d6d" : "rgba(255,77,109,0.35)";
-  }
-
-  function drawRaySegments(ray, lastTime) {
+  function drawRaySegments(ray) {
     const segs = ray.segments || [];
     for (const seg of segs) {
       if (seg.t0 == null || seg.t1 == null || seg.t0 >= seg.t1) continue;
@@ -263,24 +260,11 @@
         ? `rgba(239,68,68,${alpha})`
         : `rgba(34,197,94,${alpha})`;
       drawSegment(line.p1.time, line.p1.price, line.endTime, line.endPrice, color, 2);
-      drawSegment(line.p1.time, line.p1.price, line.p2.time, line.p2.price, color, 1, LightweightCharts.LineStyle.Dotted);
     });
 
-    const markers = [];
-    const lastTime = candles[candles.length - 1].time;
     (pack.rays || []).forEach((ray) => {
-      drawRaySegments(ray, lastTime);
-      markers.push({
-        time: ray.time,
-        position: ray.type === "AR" ? "belowBar" : "aboveBar",
-        color: markerColor(ray.type, ray.active),
-        shape: "circle",
-        size: ray.active ? 2 : 1,
-        text: ray.type,
-      });
+      drawRaySegments(ray);
     });
-    markers.sort((a, b) => a.time - b.time);
-    series.setMarkers(markers);
 
     chart.timeScale().fitContent();
     resizeObs = new ResizeObserver(() => {
@@ -331,7 +315,7 @@
     const token = ++openToken;
     const tvOpts = { tvSymbol: tvOverride, logScale };
 
-    titleEl.textContent = `${symbol} · ${tf === "1d" ? "1D" : tf.toUpperCase()}`;
+    titleEl.textContent = `${symbol} · ${tf === "1d" ? "1D" : tf === "4h" ? "4H" : tf === "1h" ? "1H" : tf.toUpperCase()}`;
     const fromWatchlist = kind === "watchlist";
 
     modal.hidden = false;
@@ -417,7 +401,10 @@
   let searchTimer = null;
 
   function tfLabel(tf) {
-    return "1D";
+    if (tf === "1d") return "1D";
+    if (tf === "4h") return "4H";
+    if (tf === "1h") return "1H";
+    return (tf || "?").toUpperCase();
   }
 
   function openSymbolSearch() {

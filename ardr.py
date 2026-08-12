@@ -178,8 +178,10 @@ def fresh_range(n: int) -> tuple[int, int]:
     return lo, last
 
 
-def collect_late_ar_dr_touches(candles: list[dict], signals: list[dict]) -> list[dict]:
-    """Report primary wick touch after >one trading week when touch bar is fresh."""
+def collect_late_ar_dr_touches(
+    candles: list[dict], signals: list[dict], touch_window_bars: int = TOUCH_WINDOW_BARS
+) -> list[dict]:
+    """Report primary wick touch after >touch_window_bars when touch bar is fresh."""
     if not candles:
         return []
     lo, last = fresh_range(len(candles))
@@ -191,7 +193,7 @@ def collect_late_ar_dr_touches(candles: list[dict], signals: list[dict]) -> list
         if ti is None:
             continue
         bars_after = ti - sig["index"]
-        if bars_after <= TOUCH_WINDOW_BARS:
+        if bars_after <= touch_window_bars:
             continue
         if not (lo <= ti <= last):
             continue
@@ -229,8 +231,10 @@ def wick_near_miss(bar: dict, level: float, is_upper: bool) -> tuple[bool, float
     return True, gap / level * 100
 
 
-def collect_late_ar_dr_near_misses(candles: list[dict], signals: list[dict]) -> list[dict]:
-    """Report fresh bars after >TOUCH_WINDOW where primary wick nears but does not touch."""
+def collect_late_ar_dr_near_misses(
+    candles: list[dict], signals: list[dict], touch_window_bars: int = TOUCH_WINDOW_BARS
+) -> list[dict]:
+    """Report fresh bars after >touch_window where primary wick nears but does not touch."""
     if not candles:
         return []
     lo, last = fresh_range(len(candles))
@@ -245,7 +249,7 @@ def collect_late_ar_dr_near_misses(candles: list[dict], signals: list[dict]) -> 
         best: dict | None = None
         for i in range(last, lo - 1, -1):
             bars_after = i - sig["index"]
-            if bars_after <= TOUCH_WINDOW_BARS:
+            if bars_after <= touch_window_bars:
                 continue
             near, gap_pct = wick_near_miss(candles[i], level, is_upper)
             if not near:

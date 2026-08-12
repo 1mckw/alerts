@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""US indices + DJI30 / NDX100 constituents — AR/DR + trend-line scanner on 1D."""
+"""US indices + DJI30 / NDX100 constituents — AR/DR + trend-line scanner."""
 
 from __future__ import annotations
 
@@ -22,7 +22,34 @@ OUT_DIR = os.path.join(ROOT, "signals")
 STATIC_DIR = os.path.join(ROOT, "static")
 CHART_PACKS_PATH = os.path.join(OUT_DIR, "chart-packs.json")
 
-TIMEFRAME = "1d"
+TIMEFRAMES: dict[str, dict[str, Any]] = {
+    "1d": {
+        "interval": "1d",
+        "range": "5y",
+        "bars": 2000,
+        "chart_bars": 800,
+        "touch_window": 5,
+        "label": "1D",
+    },
+    "4h": {
+        "interval": "4h",
+        "range": "2y",
+        "bars": 1000,
+        "chart_bars": 400,
+        "touch_window": 10,
+        "label": "4H",
+    },
+    "1h": {
+        "interval": "1h",
+        "range": "2y",
+        "bars": 2000,
+        "chart_bars": 800,
+        "touch_window": 35,
+        "label": "1H",
+    },
+}
+TIMEFRAME_ORDER = ("1d", "4h", "1h")
+TF_ORDER = {tf: i for i, tf in enumerate(TIMEFRAME_ORDER)}
 BARS = 2000
 CHART_BARS = 800
 
@@ -62,7 +89,10 @@ def http_get_json(url: str, timeout: int = 45) -> Any:
         return json.loads(resp.read().decode())
 
 
-def yahoo_range(bars: int) -> str:
+def yahoo_range(timeframe: str, bars: int) -> str:
+    cfg = TIMEFRAMES[timeframe]
+    if cfg.get("range"):
+        return str(cfg["range"])
     if bars <= 500:
         return "2y"
     if bars <= 2000:
@@ -72,8 +102,11 @@ def yahoo_range(bars: int) -> str:
     return "max"
 
 
-def fetch_yahoo(symbol: str, bars: int = BARS) -> list[dict]:
-    yrange = yahoo_range(bars)
+def fetch_yahoo(symbol: str, timeframe: str = "1d", bars: int | None = None) -> list[dict]:
+    cfg = TIMEFRAMES[timeframe]
+    iv = cfg["interval"]
+    want = bars if bars is not None else int(cfg["bars"])
+    yrange = yahoo_range(timeframe, want)
     hosts = [
         "https://query1.finance.yahoo.com",
         "https://query2.finance.yahoo.com",
@@ -83,7 +116,7 @@ def fetch_yahoo(symbol: str, bars: int = BARS) -> list[dict]:
         url = (
             f"{host}/v8/finance/chart/"
             + urllib.parse.quote(symbol, safe="=-.^")
-            + f"?interval=1d&range={yrange}&includePrePost=false"
+            + f"?interval={iv}&range={yrange}&includePrePost=false"
         )
         try:
             payload = http_get_json(url)
@@ -115,7 +148,7 @@ def fetch_yahoo(symbol: str, bars: int = BARS) -> list[dict]:
                     }
                 )
             if out:
-                return out[-bars:] if len(out) > bars else out
+                return out[-want:] if len(out) > want else out
         except Exception as exc:  # noqa: BLE001
             last_err = exc
     if last_err:
@@ -182,9 +215,34 @@ def collect_trend_exceeds(candles: list[dict], lines: list[dict]) -> list[dict]:
     return hits
 
 
-def build_chart_pack(candles: list[dict], signals: list[dict], lines: list[dict]) -> dict:
-    last_time = int(candles[-1]["time"]) if candles else 0
-    rays = [ardr.signal_to_chart_ray(sig, candles, last_time) for sig in signals]
+def build_chart_pack(
+    candles: list[dict],
+    signals: list[dict],
+    lines: list[dict],
+    chart_bars: int = CHART_BARS,
+) -> dict:
+    trimmed = candles[-chart_bars:] if len(candles) > chart_bars else candles
+    if not trimmed:
+        return {"candles": [], "rays": [], "trend_lines": []}
+
+    t_min = int(trimmed[0]["time"])
+    t_max = int(trimmed[-1]["time"])
+    last_time = t_max
+
+    visible_signals = [s for s in signals if t_min <= int(s["time"]) <= t_max]
+    rays = []
+    for sig in visible_signals:
+        ray = ardr.signal_to_chart_ray(sig, candles, last_time)
+        segs = []
+        for seg in ray.get("segments") or []:
+            t0, t1 = int(seg["t0"]), int(seg["t1"])
+            clip0, clip1 = max(t0, t_min), min(t1, t_max)
+            if clip1 > clip0:
+                segs.append({**seg, "t0": clip0, "t1": clip1})
+        if segs:
+            ray["segments"] = segs
+            rays.append(ray)
+
     trend = []
     for line in lines:
         invalidated = check_line_invalidation(candles, line)
@@ -200,7 +258,6 @@ def build_chart_pack(candles: list[dict], signals: list[dict], lines: list[dict]
                 "pivot_count": int(line.get("pivot_count") or 0),
             }
         )
-    trimmed = candles[-CHART_BARS:] if len(candles) > CHART_BARS else candles
     return {
         "candles": [
             {
@@ -222,28 +279,31 @@ def scan_job(job: dict[str, str]) -> dict:
     yahoo = job["yahoo"]
     symbol = job["symbol"]
     name = job["name"]
+    timeframe = job["timeframe"]
+    cfg = TIMEFRAMES[timeframe]
+    touch_window = int(cfg["touch_window"])
     try:
-        candles = with_retries(lambda: fetch_yahoo(yahoo))
+        candles = with_retries(lambda: fetch_yahoo(yahoo, timeframe))
         signals = detect_signals(candles)
-        late = collect_late_ar_dr_touches(candles, signals)
-        near = collect_late_ar_dr_near_misses(candles, signals)
+        late = collect_late_ar_dr_touches(candles, signals, touch_window)
+        near = collect_late_ar_dr_near_misses(candles, signals, touch_window)
         lines = build_auto_trend_lines(candles)
         trend = collect_trend_touches(candles, lines)
         exceed = collect_trend_exceeds(candles, lines)
         events = late + near + trend + exceed
         for ev in events:
-            ev["timeframe"] = TIMEFRAME
+            ev["timeframe"] = timeframe
         return {
             "group": group,
             "symbol": symbol,
             "yahoo_symbol": yahoo,
             "name": name,
             "source": "yahoo",
-            "timeframe": TIMEFRAME,
+            "timeframe": timeframe,
             "bars": len(candles),
             "events": events,
             "error": None,
-            "chart": build_chart_pack(candles, signals, lines),
+            "chart": build_chart_pack(candles, signals, lines, int(cfg["chart_bars"])),
         }
     except Exception as exc:  # noqa: BLE001
         return {
@@ -252,7 +312,7 @@ def scan_job(job: dict[str, str]) -> dict:
             "yahoo_symbol": yahoo,
             "name": name,
             "source": "yahoo",
-            "timeframe": TIMEFRAME,
+            "timeframe": timeframe,
             "bars": 0,
             "events": [],
             "error": str(exc),
@@ -268,6 +328,10 @@ def fmt_num(v: float) -> str:
     return f"{v:.6g}"
 
 
+def fmt_tf(tf: str) -> str:
+    return TIMEFRAMES.get(tf, {}).get("label", (tf or "?").upper())
+
+
 def read_static(name: str) -> str:
     with open(os.path.join(STATIC_DIR, name), encoding="utf-8") as f:
         return f.read()
@@ -278,7 +342,7 @@ def build_symbol_catalog(results: list[dict], charts: dict) -> list[dict]:
     for r in results:
         if r.get("error"):
             continue
-        g, sym, tf = r["group"], r["symbol"], r.get("timeframe") or TIMEFRAME
+        g, sym, tf = r["group"], r["symbol"], r.get("timeframe") or "1d"
         ck = chart_key(g, sym, tf)
         catalog.append(
             {
@@ -293,6 +357,7 @@ def build_symbol_catalog(results: list[dict], charts: dict) -> list[dict]:
     catalog.sort(
         key=lambda x: (
             not x["hasHit"],
+            TF_ORDER.get(x.get("timeframe", ""), 99),
             GROUP_ORDER.get(x["group"], 99),
             x["symbol"],
         )
@@ -314,11 +379,12 @@ def render_html(payload: dict) -> str:
         sym = str(h.get("symbol", ""))
         grp = str(h.get("group", ""))
         name = str(h.get("name", sym))
+        tf = str(h.get("timeframe", "1d"))
         attrs = (
             f'data-symbol="{html.escape(sym, quote=True)}" '
             f'data-group="{html.escape(grp, quote=True)}" '
             f'data-name="{html.escape(name, quote=True)}" '
-            f'data-tf="1d" '
+            f'data-tf="{html.escape(tf, quote=True)}" '
             f'data-level="{html.escape(str(h.get("level", "")), quote=True)}" '
             f'data-type="{html.escape(str(h.get("type", "")), quote=True)}" '
             f'data-kind="{html.escape(str(h.get("kind", "")), quote=True)}" '
@@ -328,6 +394,9 @@ def render_html(payload: dict) -> str:
             f'<button type="button" class="sym-btn" {attrs} title="開啟蠟燭圖">'
             f"<code>{html.escape(sym)}</code></button>"
         )
+
+    def tf_cell(h: dict) -> str:
+        return html.escape(fmt_tf(str(h.get("timeframe", "1d"))))
 
     def pool_cell(h: dict) -> str:
         g = h.get("group", "")
@@ -340,10 +409,13 @@ def render_html(payload: dict) -> str:
 
     def row_ar_dr(h: dict) -> str:
         cls = "ar" if h.get("type") == "AR" else "dr"
+        tf = str(h.get("timeframe", "1d"))
         return (
             f'<tr data-symbol="{html.escape(str(h.get("symbol","")), quote=True)}" '
-            f'data-group="{html.escape(str(h.get("group","")), quote=True)}">'
+            f'data-group="{html.escape(str(h.get("group","")), quote=True)}" '
+            f'data-timeframe="{html.escape(tf, quote=True)}">'
             f'<td><span class="tag {cls}">{html.escape(str(h.get("type", "")))}</span></td>'
+            f"<td>{tf_cell(h)}</td>"
             f"<td>{pool_cell(h)}</td>"
             f"<td>{sym_btn(h)}</td>"
             f"<td>{html.escape(h.get('name', ''))}</td>"
@@ -355,10 +427,13 @@ def render_html(payload: dict) -> str:
 
     def row_ar_near(h: dict) -> str:
         cls = "ar" if h.get("type") == "AR" else "dr"
+        tf = str(h.get("timeframe", "1d"))
         return (
             f'<tr data-symbol="{html.escape(str(h.get("symbol","")), quote=True)}" '
-            f'data-group="{html.escape(str(h.get("group","")), quote=True)}">'
+            f'data-group="{html.escape(str(h.get("group","")), quote=True)}" '
+            f'data-timeframe="{html.escape(tf, quote=True)}">'
             f'<td><span class="tag {cls}">{html.escape(str(h.get("type", "")))}</span></td>'
+            f"<td>{tf_cell(h)}</td>"
             f"<td>{pool_cell(h)}</td>"
             f"<td>{sym_btn(h)}</td>"
             f"<td>{html.escape(h.get('name', ''))}</td>"
@@ -371,10 +446,13 @@ def render_html(payload: dict) -> str:
 
     def row_trend(h: dict) -> str:
         cls = "resist" if h.get("type") == "resistance" else "support"
+        tf = str(h.get("timeframe", "1d"))
         return (
             f'<tr data-symbol="{html.escape(str(h.get("symbol","")), quote=True)}" '
-            f'data-group="{html.escape(str(h.get("group","")), quote=True)}">'
+            f'data-group="{html.escape(str(h.get("group","")), quote=True)}" '
+            f'data-timeframe="{html.escape(tf, quote=True)}">'
             f'<td><span class="tag {cls}">{html.escape(str(h.get("type", "")))}</span></td>'
+            f"<td>{tf_cell(h)}</td>"
             f"<td>{pool_cell(h)}</td>"
             f"<td>{sym_btn(h)}</td>"
             f"<td>{html.escape(h.get('name', ''))}</td>"
@@ -385,10 +463,13 @@ def render_html(payload: dict) -> str:
 
     def row_exceed(h: dict) -> str:
         cls = "resist" if h.get("type") == "resistance" else "support"
+        tf = str(h.get("timeframe", "1d"))
         return (
             f'<tr data-symbol="{html.escape(str(h.get("symbol","")), quote=True)}" '
-            f'data-group="{html.escape(str(h.get("group","")), quote=True)}">'
+            f'data-group="{html.escape(str(h.get("group","")), quote=True)}" '
+            f'data-timeframe="{html.escape(tf, quote=True)}">'
             f'<td><span class="tag {cls}">{html.escape(str(h.get("type", "")))}</span></td>'
+            f"<td>{tf_cell(h)}</td>"
             f"<td>{pool_cell(h)}</td>"
             f"<td>{sym_btn(h)}</td>"
             f"<td>{html.escape(h.get('name', ''))}</td>"
@@ -406,6 +487,7 @@ def render_html(payload: dict) -> str:
         + ";window.WATCHLISTS = {};</script>\n"
     )
 
+    tf_labels = " · ".join(fmt_tf(tf) for tf in TIMEFRAME_ORDER)
     filter_script = read_static("report-pool-filter.html")
 
     return f"""<!DOCTYPE html>
@@ -501,8 +583,8 @@ def render_html(payload: dict) -> str:
   <div class="wrap">
     <h1>US · AR/DR &amp; 趨勢線 Alerts</h1>
     <p class="meta">
-      商品池 <strong>DJI30</strong> + <strong>NDX100</strong> 指數及成分股 · 週期 <strong>1D</strong> ·
-      掃描 {u['total']} 檔（指數 {u['indices']} · DJI30 {u['dji']} · NDX100 {u['ndx']}）· 更新 {gen}
+      商品池 <strong>DJI30</strong> + <strong>NDX100</strong> 指數及成分股 · 週期 <strong>{tf_labels}</strong> ·
+      掃描 {u['total']} 檔 × {u['timeframes']} 週期 = {u['jobs']} jobs · 更新 {gen}
     </p>
     <div class="cards">
       <div class="card"><div class="lbl">掃描 OK</div><div class="val">{c['ok']}/{c['jobs']}</div></div>
@@ -512,31 +594,37 @@ def render_html(payload: dict) -> str:
       <div class="card"><div class="lbl">趨勢線超出</div><div class="val">{c['trend_exceed']}</div></div>
     </div>
     <div class="pool-filters" id="poolFilters">
-      <button type="button" data-pool="all" class="active">全部</button>
+      <button type="button" data-pool="all" class="active">全部池</button>
       <button type="button" data-pool="index">指數</button>
       <button type="button" data-pool="dji">DJI30 成分</button>
       <button type="button" data-pool="ndx">NDX100 成分</button>
     </div>
+    <div class="pool-filters" id="tfFilters">
+      <button type="button" data-tf="all" class="active">全部週期</button>
+      <button type="button" data-tf="1d">1D</button>
+      <button type="button" data-tf="4h">4H</button>
+      <button type="button" data-tf="1h">1H</button>
+    </div>
 
     <h2>趨勢線超出（最新 {TREND_EXCEED_MIN_BARS}–{TREND_EXCEED_MAX_BARS} 根）</h2>
     <div class="panel"><table><thead><tr>
-      <th>類型</th><th>池</th><th>代碼</th><th>名稱</th><th class="num">價位</th><th class="num">根數</th><th>時間</th>
-    </tr></thead><tbody data-section="exceed">{rows(exceed, "目前無超出信號", 7, row_exceed)}</tbody></table></div>
+      <th>類型</th><th>週期</th><th>池</th><th>代碼</th><th>名稱</th><th class="num">價位</th><th class="num">根數</th><th>時間</th>
+    </tr></thead><tbody data-section="exceed">{rows(exceed, "目前無超出信號", 8, row_exceed)}</tbody></table></div>
 
-    <h2>AR / DR 觸碰（&gt;{TOUCH_WINDOW_BARS} 根後）</h2>
+    <h2>AR / DR 觸碰（超過各週期門檻根數後）</h2>
     <div class="panel"><table><thead><tr>
-      <th>類型</th><th>池</th><th>代碼</th><th>名稱</th><th class="num">價位</th><th class="num">根數</th><th>時間</th>
-    </tr></thead><tbody data-section="ar_dr">{rows(ar_dr, "目前無 AR/DR 觸碰", 7, row_ar_dr)}</tbody></table></div>
+      <th>類型</th><th>週期</th><th>池</th><th>代碼</th><th>名稱</th><th class="num">價位</th><th class="num">根數</th><th>時間</th>
+    </tr></thead><tbody data-section="ar_dr">{rows(ar_dr, "目前無 AR/DR 觸碰", 8, row_ar_dr)}</tbody></table></div>
 
     <h2>AR / DR 接近未觸</h2>
     <div class="panel"><table><thead><tr>
-      <th>類型</th><th>池</th><th>代碼</th><th>名稱</th><th class="num">價位</th><th class="num">差距</th><th class="num">根數</th><th>時間</th>
-    </tr></thead><tbody data-section="ar_near">{rows(ar_near, f"目前無接近未觸（&gt;{TOUCH_WINDOW_BARS} 根後）", 8, row_ar_near)}</tbody></table></div>
+      <th>類型</th><th>週期</th><th>池</th><th>代碼</th><th>名稱</th><th class="num">價位</th><th class="num">差距</th><th class="num">根數</th><th>時間</th>
+    </tr></thead><tbody data-section="ar_near">{rows(ar_near, "目前無接近未觸", 9, row_ar_near)}</tbody></table></div>
 
     <h2>趨勢線觸碰</h2>
     <div class="panel"><table><thead><tr>
-      <th>類型</th><th>池</th><th>代碼</th><th>名稱</th><th class="num">價位</th><th>時間</th>
-    </tr></thead><tbody data-section="trend">{rows(trend, "目前無趨勢線觸碰", 6, row_trend)}</tbody></table></div>
+      <th>類型</th><th>週期</th><th>池</th><th>代碼</th><th>名稱</th><th class="num">價位</th><th>時間</th>
+    </tr></thead><tbody data-section="trend">{rows(trend, "目前無趨勢線觸碰", 7, row_trend)}</tbody></table></div>
 
     <footer>每小時自動更新 · <a href="latest.json">latest.json</a></footer>
   </div>
@@ -578,11 +666,19 @@ def render_html(payload: dict) -> str:
 
 def main() -> int:
     os.makedirs(OUT_DIR, exist_ok=True)
-    jobs = build_scan_jobs()
-    indices_n = sum(1 for j in jobs if j["group"] == "index")
-    dji_n = sum(1 for j in jobs if j["group"] == "dji")
-    ndx_n = sum(1 for j in jobs if j["group"] == "ndx")
-    print(f"Scanning {len(jobs)} jobs (index={indices_n} dji={dji_n} ndx={ndx_n})…", flush=True)
+    base_jobs = build_scan_jobs()
+    jobs: list[dict[str, str]] = []
+    for job in base_jobs:
+        for tf in TIMEFRAME_ORDER:
+            jobs.append({**job, "timeframe": tf})
+    indices_n = sum(1 for j in base_jobs if j["group"] == "index")
+    dji_n = sum(1 for j in base_jobs if j["group"] == "dji")
+    ndx_n = sum(1 for j in base_jobs if j["group"] == "ndx")
+    print(
+        f"Scanning {len(jobs)} jobs "
+        f"({len(base_jobs)} symbols × {len(TIMEFRAME_ORDER)} TF: {', '.join(fmt_tf(t) for t in TIMEFRAME_ORDER)})…",
+        flush=True,
+    )
 
     results: list[dict] = []
     workers = 10 if os.environ.get("GITHUB_ACTIONS") else 8
@@ -602,17 +698,19 @@ def main() -> int:
     for r in results:
         pack = r.pop("chart", None)
         g, sym = r["group"], r["symbol"]
-        key = chart_key(g, sym, TIMEFRAME)
+        tf = r.get("timeframe") or "1d"
+        key = chart_key(g, sym, tf)
         if pack and not r.get("error"):
             # Keep chart for indices, hits, or catalog browsing (all successful scans)
             charts[key] = pack
         slim_results.append({k: v for k, v in r.items() if k != "chart"})
         for ev in r.get("events") or []:
-            hits.append({**ev, "group": g, "symbol": sym, "name": r.get("name"), "timeframe": TIMEFRAME})
+            hits.append({**ev, "group": g, "symbol": sym, "name": r.get("name"), "timeframe": tf})
 
     hits.sort(
         key=lambda x: (
             KIND_ORDER.get(x["kind"], 99),
+            TF_ORDER.get(x.get("timeframe", ""), 99),
             GROUP_ORDER.get(x.get("group", ""), 99),
             x["symbol"],
         )
@@ -622,16 +720,18 @@ def main() -> int:
     generated_at = datetime.now(tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
     payload = {
         "generated_at": generated_at,
-        "timeframe": TIMEFRAME,
+        "timeframes": list(TIMEFRAME_ORDER),
+        "timeframe": "+".join(TIMEFRAME_ORDER),
         "universe": {
-            "total": len(jobs),
+            "total": len(base_jobs),
             "indices": indices_n,
             "dji": dji_n,
             "ndx": ndx_n,
+            "timeframes": len(TIMEFRAME_ORDER),
+            "jobs": len(jobs),
         },
         "params": {
-            "bars": BARS,
-            "touch_window_bars": TOUCH_WINDOW_BARS,
+            "timeframes": {tf: TIMEFRAMES[tf] for tf in TIMEFRAME_ORDER},
             "drop_pct": DROP_PCT,
             "min_streak": MIN_STREAK,
             "vol_mult": VOL_MULT,
