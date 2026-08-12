@@ -197,6 +197,7 @@ def build_chart_pack(candles: list[dict], signals: list[dict], lines: list[dict]
                 "endTime": int(end_time),
                 "endPrice": float(end_price),
                 "invalidated": invalidated,
+                "pivot_count": int(line.get("pivot_count") or 0),
             }
         )
     trimmed = candles[-CHART_BARS:] if len(candles) > CHART_BARS else candles
