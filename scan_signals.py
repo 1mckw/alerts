@@ -26,22 +26,22 @@ TIMEFRAMES: dict[str, dict[str, Any]] = {
     "1d": {
         "interval": "1d",
         "range": "5y",
-        "bars": 2000,
-        "chart_bars": 800,
+        "bars": 800,
+        "chart_bars": 320,
         "touch_window": 5,
         "label": "1D",
     },
     "4h": {
         "interval": "4h",
-        "range": "2y",
-        "bars": 1000,
-        "chart_bars": 400,
+        "range": "730d",
+        "bars": 1400,
+        "chart_bars": 560,
         "touch_window": 10,
         "label": "4H",
     },
     "1h": {
         "interval": "1h",
-        "range": "2y",
+        "range": "730d",
         "bars": 2000,
         "chart_bars": 800,
         "touch_window": 35,
@@ -50,8 +50,6 @@ TIMEFRAMES: dict[str, dict[str, Any]] = {
 }
 TIMEFRAME_ORDER = ("1d", "4h", "1h")
 TF_ORDER = {tf: i for i, tf in enumerate(TIMEFRAME_ORDER)}
-BARS = 2000
-CHART_BARS = 800
 
 LOOKBACK = ardr.LOOKBACK
 VOL_LEN = ardr.VOL_LEN
@@ -219,7 +217,7 @@ def build_chart_pack(
     candles: list[dict],
     signals: list[dict],
     lines: list[dict],
-    chart_bars: int = CHART_BARS,
+    chart_bars: int = 800,
 ) -> dict:
     trimmed = candles[-chart_bars:] if len(candles) > chart_bars else candles
     if not trimmed:
