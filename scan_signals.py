@@ -31,24 +31,8 @@ TIMEFRAMES: dict[str, dict[str, Any]] = {
         "touch_window": 5,
         "label": "1D",
     },
-    "4h": {
-        "interval": "4h",
-        "range": "730d",
-        "bars": 1400,
-        "chart_bars": 560,
-        "touch_window": 10,
-        "label": "4H",
-    },
-    "1h": {
-        "interval": "1h",
-        "range": "730d",
-        "bars": 2000,
-        "chart_bars": 800,
-        "touch_window": 35,
-        "label": "1H",
-    },
 }
-TIMEFRAME_ORDER = ("1d", "4h", "1h")
+TIMEFRAME_ORDER = ("1d",)
 TF_ORDER = {tf: i for i, tf in enumerate(TIMEFRAME_ORDER)}
 
 LOOKBACK = ardr.LOOKBACK
@@ -72,6 +56,9 @@ check_line_invalidation = tl.check_line_invalidation
 find_trend_touch = tl.find_trend_touch
 find_trend_exceed = tl.find_trend_exceed
 line_end_at_break = tl.line_end_at_break
+line_price = tl.line_price
+
+TREND_HIT_KINDS = frozenset({"trend_touch", "trend_exceed"})
 
 UA = {"User-Agent": "Mozilla/5.0 (compatible; US-Alerts/1.0)"}
 KIND_ORDER = {"trend_exceed": 0, "ar_dr_touch": 1, "ar_dr_near": 2, "trend_touch": 3}
@@ -213,13 +200,55 @@ def collect_trend_exceeds(candles: list[dict], lines: list[dict]) -> list[dict]:
     return hits
 
 
+def _match_trend_line_for_hit(
+    lines: list[dict], hit: dict[str, Any], candles: list[dict]
+) -> dict | None:
+    idx = hit.get("index")
+    if idx is None:
+        idx = len(candles) - 1 if candles else 0
+    level = float(hit["level"])
+    for line in lines:
+        if line["type"] != hit.get("type"):
+            continue
+        lp = line_price(line["p1"], line["slope"], int(idx))
+        tol = max(abs(lp) * 0.005, 1e-9)
+        if abs(lp - level) <= tol:
+            return line
+    return None
+
+
+def chart_pack_start_index(
+    candles: list[dict],
+    lines: list[dict],
+    chart_bars: int,
+    events: list[dict] | None = None,
+) -> int:
+    """Default last chart_bars; extend back to trend-line p1 when there is a trend hit."""
+    tail = max(0, len(candles) - chart_bars)
+    if not candles or not events or not lines:
+        return tail
+    trend_hits = [e for e in events if e.get("kind") in TREND_HIT_KINDS]
+    if not trend_hits:
+        return tail
+    starts: list[int] = []
+    for hit in trend_hits:
+        line = _match_trend_line_for_hit(lines, hit, candles)
+        if line is not None:
+            starts.append(int(line["p1"]["index"]))
+    if not starts:
+        starts = [int(line["p1"]["index"]) for line in lines]
+    return min(tail, min(starts))
+
+
 def build_chart_pack(
     candles: list[dict],
     signals: list[dict],
     lines: list[dict],
     chart_bars: int = 800,
+    events: list[dict] | None = None,
 ) -> dict:
-    trimmed = candles[-chart_bars:] if len(candles) > chart_bars else candles
+    start_idx = chart_pack_start_index(candles, lines, chart_bars, events)
+    trimmed = candles[start_idx:]
     if not trimmed:
         return {"candles": [], "rays": [], "trend_lines": []}
 
@@ -301,7 +330,9 @@ def scan_job(job: dict[str, str]) -> dict:
             "bars": len(candles),
             "events": events,
             "error": None,
-            "chart": build_chart_pack(candles, signals, lines, int(cfg["chart_bars"])),
+            "chart": build_chart_pack(
+                candles, signals, lines, int(cfg["chart_bars"]), events=events
+            ),
         }
     except Exception as exc:  # noqa: BLE001
         return {
@@ -596,12 +627,6 @@ def render_html(payload: dict) -> str:
       <button type="button" data-pool="index">指數</button>
       <button type="button" data-pool="dji">DJI30 成分</button>
       <button type="button" data-pool="ndx">NDX100 成分</button>
-    </div>
-    <div class="pool-filters" id="tfFilters">
-      <button type="button" data-tf="all" class="active">全部週期</button>
-      <button type="button" data-tf="1d">1D</button>
-      <button type="button" data-tf="4h">4H</button>
-      <button type="button" data-tf="1h">1H</button>
     </div>
 
     <h2>趨勢線超出（最新 {TREND_EXCEED_MIN_BARS}–{TREND_EXCEED_MAX_BARS} 根）</h2>
