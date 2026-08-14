@@ -1,6 +1,6 @@
 # US AR/DR Touch Alerts
 
-GitHub Pages 每小時掃描 **道瓊 30、納指 100 指數及成分股** 日 K，輸出 AR/DR 與趨勢線觸碰報告。
+GitHub Pages 每小時掃描 **道瓊 30、納指 100、標普 500 指數及成分股** 日 K，輸出 AR/DR 與趨勢線觸碰報告。
 
 ## 線上報告
 
@@ -11,9 +11,12 @@ GitHub Pages 每小時掃描 **道瓊 30、納指 100 指數及成分股** 日 K
 
 | 池 | 數量 | 說明 |
 |----|------|------|
-| **指數** | 2 | DJI30（`^DJI`）、NDX100（`^NDX`） |
+| **指數** | 3 | DJI30（`^DJI`）、NDX100（`^NDX`）、SP500（`^GSPC`） |
 | **DJI30 成分** | 30 | 道瓊 30 成分股 |
-| **NDX100 成分** | ~102 | 納指 100 成分股（與 DJI 重疊者歸類為 DJI30） |
+| **NDX100 成分** | ~94 | 納指 100 成分股（與 DJI 重疊者歸 DJI30） |
+| **SP500 成分** | ~393 | 標普 500 成分股（與 DJI/NDX 重疊者依優先序歸類） |
+
+共 **520** 檔 × **1D** = **520** 掃描 jobs（去重後）。
 
 週期：**1D** · 更新：每小時（UTC 整點）
 
@@ -47,4 +50,4 @@ Repo → **Actions** → **Hourly US Alerts (DJI30 + NDX100)** → **Run workflo
 python scan_signals.py
 ```
 
-成分股清單：`universe.py`（NDX100 來源：slickcharts.com/nasdaq100）
+成分股清單：`universe.py` · SP500 來源：Wikipedia List of S&P 500 companies（`sp500_constituents.py`）

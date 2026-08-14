@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""US indices + DJI30 / NDX100 constituents — AR/DR + trend-line scanner."""
+"""US indices + DJI30 / NDX100 / SP500 constituents — AR/DR + trend-line scanner."""
 
 from __future__ import annotations
 
@@ -612,7 +612,7 @@ def render_html(payload: dict) -> str:
   <div class="wrap">
     <h1>US · AR/DR &amp; 趨勢線 Alerts</h1>
     <p class="meta">
-      商品池 <strong>DJI30</strong> + <strong>NDX100</strong> 指數及成分股 · 週期 <strong>{tf_labels}</strong> ·
+      商品池 <strong>DJI30</strong> + <strong>NDX100</strong> + <strong>SP500</strong> 指數及成分股 · 週期 <strong>{tf_labels}</strong> ·
       掃描 {u['total']} 檔 × {u['timeframes']} 週期 = {u['jobs']} jobs · 更新 {gen}
     </p>
     <div class="cards">
@@ -627,6 +627,7 @@ def render_html(payload: dict) -> str:
       <button type="button" data-pool="index">指數</button>
       <button type="button" data-pool="dji">DJI30 成分</button>
       <button type="button" data-pool="ndx">NDX100 成分</button>
+      <button type="button" data-pool="sp500">SP500 成分</button>
     </div>
 
     <h2>趨勢線超出（最新 {TREND_EXCEED_MIN_BARS}–{TREND_EXCEED_MAX_BARS} 根）</h2>
@@ -697,6 +698,7 @@ def main() -> int:
     indices_n = sum(1 for j in base_jobs if j["group"] == "index")
     dji_n = sum(1 for j in base_jobs if j["group"] == "dji")
     ndx_n = sum(1 for j in base_jobs if j["group"] == "ndx")
+    sp500_n = sum(1 for j in base_jobs if j["group"] == "sp500")
     print(
         f"Scanning {len(jobs)} jobs "
         f"({len(base_jobs)} symbols × {len(TIMEFRAME_ORDER)} TF: {', '.join(fmt_tf(t) for t in TIMEFRAME_ORDER)})…",
@@ -750,6 +752,7 @@ def main() -> int:
             "indices": indices_n,
             "dji": dji_n,
             "ndx": ndx_n,
+            "sp500": sp500_n,
             "timeframes": len(TIMEFRAME_ORDER),
             "jobs": len(jobs),
         },

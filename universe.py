@@ -1,10 +1,13 @@
-"""Scan universe: DJI30 / NDX100 indices and constituent stocks."""
+"""Scan universe: DJI30 / NDX100 / SP500 indices and constituent stocks."""
 
 from __future__ import annotations
+
+from sp500_constituents import SP500_STOCKS
 
 INDICES: list[tuple[str, str, str, str]] = [
     ("index", "^DJI", "DJI30", "道瓊 30"),
     ("index", "^NDX", "NDX100", "納指 100"),
+    ("index", "^GSPC", "SP500", "標普 500"),
 ]
 
 # Current DJIA constituents (Yahoo tickers)
@@ -147,11 +150,11 @@ NDX100_STOCKS: list[tuple[str, str]] = [
     ("CPRT", "Copart"),
 ]
 
-GROUP_ORDER = {"index": 0, "dji": 1, "ndx": 2}
+GROUP_ORDER = {"index": 0, "dji": 1, "ndx": 2, "sp500": 3}
 
 
 def build_scan_jobs() -> list[dict[str, str]]:
-    """Return deduplicated scan jobs; DJI group wins when a ticker is in both lists."""
+    """Return deduplicated scan jobs; DJI > NDX > SP500 when a ticker is in multiple lists."""
     jobs: list[dict[str, str]] = []
     seen: set[str] = set()
 
@@ -168,6 +171,7 @@ def build_scan_jobs() -> list[dict[str, str]]:
     dji_set = {t for t, _ in DJI30_STOCKS}
     ndx_names = dict(NDX100_STOCKS)
     dji_names = dict(DJI30_STOCKS)
+    sp500_names = dict(SP500_STOCKS)
 
     for ticker, name in DJI30_STOCKS:
         if ticker in seen:
@@ -195,15 +199,40 @@ def build_scan_jobs() -> list[dict[str, str]]:
             }
         )
 
-    # Tag overlap for display (in both DJI & NDX)
+    for ticker, name in SP500_STOCKS:
+        if ticker in seen:
+            continue
+        seen.add(ticker)
+        jobs.append(
+            {
+                "group": "sp500",
+                "yahoo": ticker,
+                "symbol": ticker,
+                "name": sp500_names.get(ticker, name),
+            }
+        )
+
     for job in jobs:
-        if job["group"] == "dji" and job["yahoo"] in ndx_names:
+        y = job.get("yahoo", "")
+        if job["group"] == "dji" and y in ndx_names:
             job["also_ndx"] = "1"
-        elif job["group"] == "ndx" and job["yahoo"] in dji_set:
+        elif job["group"] == "ndx" and y in dji_set:
             job["also_dji"] = "1"
+        if job["group"] in ("dji", "ndx") and y in sp500_names:
+            job["also_sp500"] = "1"
+        elif job["group"] == "sp500" and (y in dji_set or y in ndx_names):
+            if y in dji_set:
+                job["also_dji"] = "1"
+            if y in ndx_names:
+                job["also_ndx"] = "1"
 
     return jobs
 
 
 def group_label(group: str) -> str:
-    return {"index": "指數", "dji": "DJI30", "ndx": "NDX100"}.get(group, group)
+    return {
+        "index": "指數",
+        "dji": "DJI30",
+        "ndx": "NDX100",
+        "sp500": "SP500",
+    }.get(group, group)
