@@ -4,9 +4,10 @@ Touch points = strict pivots on the line plus local extrema (wing 2) whose
 wick reaches or nears the line (2%). Sharp up/down bars that break the line are
 not touch points. Line construction ignores wick exceed (body-only pierce
 rules). Lines need not stay valid to the latest bar — a broken historical line
-with enough touches is still kept and drawn clipped at the break. When multiple
-anchor pivots fall within K+6 bars, keep the line with the most touches. Sharp
-pierce grace unchanged.
+with enough touches is still kept. Drawing extends the line to the latest bar
+(invalidated lines are faded on the chart). When multiple anchor pivots fall
+within K+6 bars, keep the line with the most touches. Sharp pierce grace
+unchanged.
 """
 
 from __future__ import annotations
@@ -398,10 +399,8 @@ def find_trend_touch(candles: list[dict], line: dict) -> dict | None:
 
 
 def line_end_at_break(candles: list[dict], line: dict) -> tuple[int, float]:
-    """Return (end_time, end_price) for drawing; clip at break bar if invalidated."""
+    """Return (end_time, end_price) for drawing; always extend to the latest bar."""
     last_i = len(candles) - 1
-    break_i = find_line_break_index(candles, line)
-    end_i = break_i if break_i is not None else last_i
-    end_i = max(end_i, line["p2"]["index"])
+    end_i = max(last_i, line["p2"]["index"])
     lp = line_price(line["p1"], line["slope"], end_i)
     return int(candles[end_i]["time"]), float(lp)
