@@ -3,11 +3,11 @@
 Touch points = strict pivots on the line plus local extrema (wing 2) whose
 wick reaches or nears the line (2%). Sharp up/down bars that break the line are
 not touch points. Line construction ignores wick exceed (body-only pierce
-rules). Lines need not stay valid to the latest bar — a broken historical line
-with enough touches is still kept. Drawing extends the line to the latest bar
-(invalidated lines are faded on the chart). When multiple anchor pivots fall
-within K+6 bars, keep the line with the most touches. Sharp pierce grace
-unchanged.
+rules). Up to two lines per side: the stronger line may be historical (no
+valid_to_current); the second must stay valid to the latest bar. Drawing
+extends to the latest bar; already-broken lines do not emit 1–10 bar exceed
+alerts. When multiple anchor pivots fall within K+6 bars, keep the line with
+the most touches. Sharp pierce grace unchanged.
 """
 
 from __future__ import annotations
@@ -290,6 +290,13 @@ def valid_between_pivots(candles: list[dict], p1: dict, p2: dict, resistance: bo
     )
 
 
+def valid_to_current(candles: list[dict], p1: dict, p2: dict, resistance: bool) -> bool:
+    slope = (p2["price"] - p1["price"]) / (p2["index"] - p1["index"])
+    return validate_line_body_segment(
+        candles, p1, slope, p2["index"] + 1, len(candles) - 1, resistance
+    )
+
+
 def build_auto_trend_lines(candles: list[dict]) -> list[dict]:
     start_idx = max(0, len(candles) - MAX_LOOKBACK)
     slice_c = candles[start_idx:]
@@ -316,6 +323,7 @@ def build_auto_trend_lines(candles: list[dict]) -> list[dict]:
                     continue
                 if not valid_between_pivots(candles, p1, p3, resistance):
                     continue
+                passes_current = valid_to_current(candles, p1, p3, resistance)
                 from_a.append(
                     {
                         "type": "resistance" if resistance else "support",
@@ -324,6 +332,7 @@ def build_auto_trend_lines(candles: list[dict]) -> list[dict]:
                         "slope": slope,
                         "span": p3["index"] - p1["index"],
                         "pivot_count": touch_count,
+                        "valid_to_current": passes_current,
                     }
                 )
             from_a = pick_best_touch_lines_nearby(from_a)
@@ -332,13 +341,23 @@ def build_auto_trend_lines(candles: list[dict]) -> list[dict]:
         candidates.sort(key=lambda c: (-c["pivot_count"], -c["span"], c["p1"]["index"]))
         picked, used = [], set()
         limit = MAX_RESISTANCE if resistance else MAX_SUPPORT
-        for c in candidates:
-            if len(picked) >= limit:
-                break
-            if c["p1"]["index"] in used:
-                continue
-            picked.append(c)
-            used.add(c["p1"]["index"])
+
+        def try_pick(require_current: bool, max_add: int) -> None:
+            added = 0
+            for c in candidates:
+                if len(picked) >= limit or added >= max_add:
+                    return
+                if c["p1"]["index"] in used:
+                    continue
+                if require_current and not c.get("valid_to_current"):
+                    continue
+                picked.append(c)
+                used.add(c["p1"]["index"])
+                added += 1
+
+        try_pick(require_current=False, max_add=1)
+        if limit > 1:
+            try_pick(require_current=True, max_add=1)
         return picked
 
     return collect(piv_high, True) + collect(piv_low, False)
@@ -356,6 +375,8 @@ def find_trend_exceed(
 ) -> dict | None:
     """Return if the latest consecutive exceed streak is within [min_n, max_n]."""
     if len(candles) < min_n:
+        return None
+    if find_line_break_index(candles, line) is not None:
         return None
     p1 = line["p1"]
     slope = line["slope"]
