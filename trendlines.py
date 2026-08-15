@@ -1,7 +1,8 @@
 """Auto trend lines: ≥3 touch points, body validation, sharp pierce grace.
 
 Touch points = strict pivots on the line plus local extrema (wing 2) whose
-wick reaches or nears the line (2%). Line construction ignores wick exceed (body-only pierce
+wick reaches or nears the line (2%). Sharp up/down bars that break the line are
+not touch points. Line construction ignores wick exceed (body-only pierce
 rules). When multiple anchor pivots fall within K+6 bars, keep the line with
 the most touches. Sharp pierce grace unchanged.
 """
@@ -100,6 +101,13 @@ def is_sharp_pierce_bar(candles: list[dict], i: int, resistance: bool) -> bool:
     if resistance:
         return ardr.sharp_up(candles, i)
     return ardr.sharp_down(candles, i)
+
+
+def is_sharp_line_break_touch(candles: list[dict], i: int, lp: float, resistance: bool) -> bool:
+    """Sharp up/down bar that breaks the line — cannot count as a touch point."""
+    if not is_sharp_pierce_bar(candles, i, resistance):
+        return False
+    return wick_touches_line_build(candles, i, lp, resistance)
 
 
 def validate_line_body_segment(
@@ -229,6 +237,8 @@ def count_line_touch_points(
     last_touch_i = -10**9
     for i in range(start_i, end_i + 1):
         lp = line_price(p1, slope, i)
+        if is_sharp_line_break_touch(candles, i, lp, resistance):
+            continue
         if i in on_line_pivot_idx:
             qualifies = True
         elif is_local_extreme(candles, i, resistance) and wick_qualifies_touch_build(
