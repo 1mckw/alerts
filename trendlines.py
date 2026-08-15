@@ -3,8 +3,10 @@
 Touch points = strict pivots on the line plus local extrema (wing 2) whose
 wick reaches or nears the line (2%). Sharp up/down bars that break the line are
 not touch points. Line construction ignores wick exceed (body-only pierce
-rules). When multiple anchor pivots fall within K+6 bars, keep the line with
-the most touches. Sharp pierce grace unchanged.
+rules). Lines need not stay valid to the latest bar — a broken historical line
+with enough touches is still kept and drawn clipped at the break. When multiple
+anchor pivots fall within K+6 bars, keep the line with the most touches. Sharp
+pierce grace unchanged.
 """
 
 from __future__ import annotations
@@ -287,13 +289,6 @@ def valid_between_pivots(candles: list[dict], p1: dict, p2: dict, resistance: bo
     )
 
 
-def valid_to_current(candles: list[dict], p1: dict, p2: dict, resistance: bool) -> bool:
-    slope = (p2["price"] - p1["price"]) / (p2["index"] - p1["index"])
-    return validate_line_body_segment(
-        candles, p1, slope, p2["index"] + 1, len(candles) - 1, resistance
-    )
-
-
 def build_auto_trend_lines(candles: list[dict]) -> list[dict]:
     start_idx = max(0, len(candles) - MAX_LOOKBACK)
     slice_c = candles[start_idx:]
@@ -319,8 +314,6 @@ def build_auto_trend_lines(candles: list[dict]) -> list[dict]:
                 if touch_count < MIN_LINE_PIVOTS:
                     continue
                 if not valid_between_pivots(candles, p1, p3, resistance):
-                    continue
-                if not valid_to_current(candles, p1, p3, resistance):
                     continue
                 from_a.append(
                     {
