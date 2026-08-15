@@ -19,6 +19,7 @@ import ardr
 PIVOT_HIGH = 4
 PIVOT_LOW = 4
 MAX_LOOKBACK = 2000
+BEST_TOUCH_LOOKBACK = 200
 MAX_RESISTANCE = 2
 MAX_SUPPORT = 2
 MAX_LINES_PER_PIVOT = 1
@@ -361,6 +362,48 @@ def build_auto_trend_lines(candles: list[dict]) -> list[dict]:
         return picked
 
     return collect(piv_high, True) + collect(piv_low, False)
+
+
+def build_best_touch_line(candles: list[dict]) -> dict | None:
+    """Single best-touch line in the latest BEST_TOUCH_LOOKBACK bars (broken OK)."""
+    start_idx = max(0, len(candles) - BEST_TOUCH_LOOKBACK)
+    slice_c = candles[start_idx:]
+    offset = start_idx
+    piv_high, _ = find_pivots(slice_c, PIVOT_HIGH, True, False)
+    _, piv_low = find_pivots(slice_c, PIVOT_LOW, False, True)
+    piv_high = [{**p, "index": p["index"] + offset} for p in piv_high]
+    piv_low = [{**p, "index": p["index"] + offset} for p in piv_low]
+
+    candidates: list[dict] = []
+    for resistance, pts in ((True, piv_high), (False, piv_low)):
+        n_pts = len(pts)
+        for a in range(n_pts):
+            for c in range(a + 1, n_pts):
+                p1, p3 = pts[a], pts[c]
+                if resistance and p3["price"] >= p1["price"]:
+                    continue
+                if not resistance and p3["price"] <= p1["price"]:
+                    continue
+                slope = (p3["price"] - p1["price"]) / (p3["index"] - p1["index"])
+                touch_count = count_line_pivots(candles, pts, a, c, p1, slope, resistance)
+                if touch_count < MIN_LINE_PIVOTS:
+                    continue
+                if not valid_between_pivots(candles, p1, p3, resistance):
+                    continue
+                candidates.append(
+                    {
+                        "type": "resistance" if resistance else "support",
+                        "p1": p1,
+                        "p2": p3,
+                        "slope": slope,
+                        "span": p3["index"] - p1["index"],
+                        "pivot_count": touch_count,
+                    }
+                )
+
+    if not candidates:
+        return None
+    return max(candidates, key=lambda c: (c["pivot_count"], c["span"], -c["p1"]["index"]))
 
 
 def check_line_invalidation(candles: list[dict], line: dict) -> bool:

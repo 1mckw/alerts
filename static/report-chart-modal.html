@@ -262,6 +262,18 @@
       drawSegment(line.p1.time, line.p1.price, line.endTime, line.endPrice, color, 2);
     });
 
+    const bestTouch = pack.best_touch_line;
+    if (bestTouch) {
+      drawSegment(
+        bestTouch.p1.time,
+        bestTouch.p1.price,
+        bestTouch.endTime,
+        bestTouch.endPrice,
+        "rgba(250,204,21,0.95)",
+        2,
+      );
+    }
+
     (pack.rays || []).forEach((ray) => {
       drawRaySegments(ray);
     });
