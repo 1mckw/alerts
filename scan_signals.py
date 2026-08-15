@@ -56,9 +56,6 @@ check_line_invalidation = tl.check_line_invalidation
 find_trend_touch = tl.find_trend_touch
 find_trend_exceed = tl.find_trend_exceed
 line_end_at_break = tl.line_end_at_break
-line_price = tl.line_price
-
-TREND_HIT_KINDS = frozenset({"trend_touch", "trend_exceed"})
 
 UA = {"User-Agent": "Mozilla/5.0 (compatible; US-Alerts/1.0)"}
 KIND_ORDER = {"trend_exceed": 0, "ar_dr_touch": 1, "ar_dr_near": 2, "trend_touch": 3}
@@ -200,44 +197,16 @@ def collect_trend_exceeds(candles: list[dict], lines: list[dict]) -> list[dict]:
     return hits
 
 
-def _match_trend_line_for_hit(
-    lines: list[dict], hit: dict[str, Any], candles: list[dict]
-) -> dict | None:
-    idx = hit.get("index")
-    if idx is None:
-        idx = len(candles) - 1 if candles else 0
-    level = float(hit["level"])
-    for line in lines:
-        if line["type"] != hit.get("type"):
-            continue
-        lp = line_price(line["p1"], line["slope"], int(idx))
-        tol = max(abs(lp) * 0.005, 1e-9)
-        if abs(lp - level) <= tol:
-            return line
-    return None
-
-
 def chart_pack_start_index(
     candles: list[dict],
     lines: list[dict],
     chart_bars: int,
-    events: list[dict] | None = None,
 ) -> int:
-    """Default last chart_bars; extend back to trend-line p1 when there is a trend hit."""
+    """Default last chart_bars; extend back to earliest trend-line p1 so lines are not clipped."""
     tail = max(0, len(candles) - chart_bars)
-    if not candles or not events or not lines:
+    if not candles or not lines:
         return tail
-    trend_hits = [e for e in events if e.get("kind") in TREND_HIT_KINDS]
-    if not trend_hits:
-        return tail
-    starts: list[int] = []
-    for hit in trend_hits:
-        line = _match_trend_line_for_hit(lines, hit, candles)
-        if line is not None:
-            starts.append(int(line["p1"]["index"]))
-    if not starts:
-        starts = [int(line["p1"]["index"]) for line in lines]
-    return min(tail, min(starts))
+    return min(tail, min(int(line["p1"]["index"]) for line in lines))
 
 
 def build_chart_pack(
@@ -245,9 +214,8 @@ def build_chart_pack(
     signals: list[dict],
     lines: list[dict],
     chart_bars: int = 800,
-    events: list[dict] | None = None,
 ) -> dict:
-    start_idx = chart_pack_start_index(candles, lines, chart_bars, events)
+    start_idx = chart_pack_start_index(candles, lines, chart_bars)
     trimmed = candles[start_idx:]
     if not trimmed:
         return {"candles": [], "rays": [], "trend_lines": []}
@@ -330,9 +298,7 @@ def scan_job(job: dict[str, str]) -> dict:
             "bars": len(candles),
             "events": events,
             "error": None,
-            "chart": build_chart_pack(
-                candles, signals, lines, int(cfg["chart_bars"]), events=events
-            ),
+            "chart": build_chart_pack(candles, signals, lines, int(cfg["chart_bars"])),
         }
     except Exception as exc:  # noqa: BLE001
         return {
