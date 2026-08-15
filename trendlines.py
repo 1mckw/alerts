@@ -1,8 +1,9 @@
 """Auto trend lines: ≥3 touch points, body validation, sharp pierce grace.
 
 Touch points = strict pivots on the line plus local extrema (wing 2) whose
-wick is near the line. When multiple anchor pivots fall within K+6 bars, keep
-the line with the most touches. Sharp pierce grace unchanged.
+wick reaches or nears the line (2%). Line construction ignores wick exceed (body-only pierce
+rules). When multiple anchor pivots fall within K+6 bars, keep the line with
+the most touches. Sharp pierce grace unchanged.
 """
 
 from __future__ import annotations
@@ -19,7 +20,7 @@ MAX_SUPPORT = 2
 MAX_LINES_PER_PIVOT = 1
 MIN_LINE_PIVOTS = 3
 PIVOT_LINE_TOL_PCT = 0.002
-NEAR_LINE_TOL_PCT = 0.004
+NEAR_LINE_TOL_PCT = 0.02
 LOCAL_EXTREME_WING = 2
 MIN_TOUCH_BAR_GAP = 3
 NEARBY_PIVOT_LOOKAHEAD = 6  # from pivot K through K+6 bars
@@ -87,6 +88,14 @@ def body_crosses(candles: list[dict], i: int, lp: float, resistance: bool) -> bo
     return body_lo < lp
 
 
+def wick_touches_line_build(candles: list[dict], i: int, lp: float, resistance: bool) -> bool:
+    """Build-time touch: wick reached the line; piercing beyond is OK."""
+    c = candles[i]
+    if resistance:
+        return c["high"] >= lp
+    return c["low"] <= lp
+
+
 def is_sharp_pierce_bar(candles: list[dict], i: int, resistance: bool) -> bool:
     if resistance:
         return ardr.sharp_up(candles, i)
@@ -101,7 +110,10 @@ def validate_line_body_segment(
     end_i: int,
     resistance: bool,
 ) -> bool:
-    """True if no disallowed body pierce between start_i and end_i inclusive."""
+    """True if no disallowed body pierce between start_i and end_i inclusive.
+
+    Wick exceed alone does not invalidate a candidate line during construction.
+    """
     if start_i > end_i:
         return True
     in_grace = False
@@ -151,15 +163,24 @@ def find_line_break_index(candles: list[dict], line: dict) -> int | None:
     return None
 
 
-def pivot_on_line(p: dict, lp: float) -> bool:
-    tol = max(abs(lp) * PIVOT_LINE_TOL_PCT, 1e-9)
-    return abs(p["price"] - lp) <= tol
-
-
 def wick_near_line(candles: list[dict], i: int, lp: float, resistance: bool) -> bool:
     tol = max(abs(lp) * NEAR_LINE_TOL_PCT, 1e-9)
     wick = candles[i]["high"] if resistance else candles[i]["low"]
     return abs(wick - lp) <= tol
+
+
+def wick_qualifies_touch_build(
+    candles: list[dict], i: int, lp: float, resistance: bool
+) -> bool:
+    """Build-time: wick reached/exceeded the line, or wick within NEAR_LINE_TOL_PCT."""
+    return wick_touches_line_build(candles, i, lp, resistance) or wick_near_line(
+        candles, i, lp, resistance
+    )
+
+
+def pivot_on_line(p: dict, lp: float) -> bool:
+    tol = max(abs(lp) * PIVOT_LINE_TOL_PCT, 1e-9)
+    return abs(p["price"] - lp) <= tol
 
 
 def is_local_extreme(candles: list[dict], i: int, resistance: bool) -> bool:
@@ -193,7 +214,7 @@ def count_line_touch_points(
     pt_lo: int = 0,
     pt_hi: int = -1,
 ) -> int:
-    """Touch points: strict pivots on line + local extrema with wick near line."""
+    """Touch points: strict pivots on line + local extrema with wick on/near line (2%)."""
     if start_i > end_i:
         return 0
     on_line_pivot_idx = set()
@@ -210,7 +231,9 @@ def count_line_touch_points(
         lp = line_price(p1, slope, i)
         if i in on_line_pivot_idx:
             qualifies = True
-        elif is_local_extreme(candles, i, resistance) and wick_near_line(candles, i, lp, resistance):
+        elif is_local_extreme(candles, i, resistance) and wick_qualifies_touch_build(
+            candles, i, lp, resistance
+        ):
             qualifies = True
         else:
             qualifies = False
