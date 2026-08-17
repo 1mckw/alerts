@@ -161,6 +161,8 @@
     statusEl.hidden = true;
   }
 
+  const OVERLAY_LINE_WIDTH = 1;
+
   function drawSegment(t0, p0, t1, p1, color, width, style) {
     if (t0 == null || t1 == null || t0 === t1) return;
     const s = chart.addLineSeries({
@@ -193,7 +195,7 @@
         seg.t1,
         seg.price,
         rayColor(ray.type, seg.active),
-        seg.side === "upper" ? 1 : 1,
+        OVERLAY_LINE_WIDTH,
         LightweightCharts.LineStyle.Dashed
       );
     }
@@ -259,7 +261,7 @@
       const color = line.type === "resistance"
         ? `rgba(239,68,68,${alpha})`
         : `rgba(34,197,94,${alpha})`;
-      drawSegment(line.p1.time, line.p1.price, line.endTime, line.endPrice, color, 2);
+      drawSegment(line.p1.time, line.p1.price, line.endTime, line.endPrice, color, OVERLAY_LINE_WIDTH);
     });
 
     const bestTouch = pack.best_touch_line;
@@ -269,8 +271,8 @@
         bestTouch.p1.price,
         bestTouch.endTime,
         bestTouch.endPrice,
-        "rgba(250,204,21,0.95)",
-        2,
+        "rgba(59,130,246,0.95)",
+        OVERLAY_LINE_WIDTH,
       );
     }
 
