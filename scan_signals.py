@@ -601,7 +601,7 @@ def render_html(payload: dict) -> str:
   <div class="wrap">
     <h1>US · AR/DR &amp; 趨勢線 Alerts</h1>
     <p class="meta">
-      商品池 <strong>DJI30</strong> + <strong>NDX100</strong> + <strong>SP500</strong> 指數及成分股 · 週期 <strong>{tf_labels}</strong> ·
+      商品池 <strong>DJI30</strong> + <strong>NDX100</strong> + <strong>SP500</strong> + <strong>大宗</strong> · 週期 <strong>{tf_labels}</strong> ·
       掃描 {u['total']} 檔 × {u['timeframes']} 週期 = {u['jobs']} jobs · 更新 {gen}
     </p>
     <div class="cards">
@@ -614,6 +614,7 @@ def render_html(payload: dict) -> str:
     <div class="pool-filters" id="poolFilters">
       <button type="button" data-pool="all" class="active">全部池</button>
       <button type="button" data-pool="index">指數</button>
+      <button type="button" data-pool="commodity">大宗</button>
       <button type="button" data-pool="dji">DJI30 成分</button>
       <button type="button" data-pool="ndx">NDX100 成分</button>
       <button type="button" data-pool="sp500">SP500 成分</button>
@@ -688,6 +689,7 @@ def main() -> int:
     dji_n = sum(1 for j in base_jobs if j["group"] == "dji")
     ndx_n = sum(1 for j in base_jobs if j["group"] == "ndx")
     sp500_n = sum(1 for j in base_jobs if j["group"] == "sp500")
+    commodity_n = sum(1 for j in base_jobs if j["group"] == "commodity")
     print(
         f"Scanning {len(jobs)} jobs "
         f"({len(base_jobs)} symbols × {len(TIMEFRAME_ORDER)} TF: {', '.join(fmt_tf(t) for t in TIMEFRAME_ORDER)})…",
@@ -742,6 +744,7 @@ def main() -> int:
             "dji": dji_n,
             "ndx": ndx_n,
             "sp500": sp500_n,
+            "commodity": commodity_n,
             "timeframes": len(TIMEFRAME_ORDER),
             "jobs": len(jobs),
         },

@@ -91,7 +91,7 @@
     }
     list.innerHTML = items
       .map((x) => {
-        const pool = { index: "指數", dji: "DJI30", ndx: "NDX100", sp500: "SP500" }[x.group] || x.group;
+        const pool = { index: "指數", commodity: "大宗", dji: "DJI30", ndx: "NDX100", sp500: "SP500" }[x.group] || x.group;
         const tf = String(x.timeframe || "1d").toUpperCase();
         const hit = x.hasHit ? " · 有信號" : "";
         return (

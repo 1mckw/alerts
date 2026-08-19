@@ -1,4 +1,4 @@
-"""Scan universe: DJI30 / NDX100 / SP500 indices and constituent stocks."""
+"""Scan universe: DJI30 / NDX100 / SP500 indices, constituents, and commodities."""
 
 from __future__ import annotations
 
@@ -8,6 +8,48 @@ INDICES: list[tuple[str, str, str, str]] = [
     ("index", "^DJI", "DJI30", "道瓊 30"),
     ("index", "^NDX", "NDX100", "納指 100"),
     ("index", "^GSPC", "SP500", "標普 500"),
+]
+
+# Yahoo Finance futures tickers (yahoo, display symbol, name)
+COMMODITIES: list[tuple[str, str, str]] = [
+    # Metals
+    ("GC=F", "GOLD", "Gold"),
+    ("SI=F", "SILVER", "Silver"),
+    ("PL=F", "PLAT", "Platinum"),
+    ("PA=F", "PALL", "Palladium"),
+    ("HG=F", "COPPER", "Copper"),
+    ("ALI=F", "ALUM", "Aluminum"),
+    ("MGC=F", "MGOLD", "Micro Gold"),
+    ("SIL=F", "MSILVER", "Micro Silver"),
+    # Energy
+    ("CL=F", "CRUDE", "Crude Oil WTI"),
+    ("BZ=F", "BRENT", "Brent Crude"),
+    ("NG=F", "NATGAS", "Natural Gas"),
+    ("HO=F", "HEAT", "Heating Oil"),
+    ("RB=F", "GASO", "RBOB Gasoline"),
+    ("QM=F", "EMCRUDE", "E-mini Crude"),
+    ("QG=F", "EMNGAS", "E-mini Nat Gas"),
+    # Grains & oilseeds
+    ("ZC=F", "CORN", "Corn"),
+    ("ZW=F", "WHEAT", "Wheat"),
+    ("KE=F", "KWHEAT", "KC Wheat"),
+    ("ZS=F", "SOY", "Soybeans"),
+    ("ZM=F", "MEAL", "Soybean Meal"),
+    ("ZL=F", "SOYOIL", "Soybean Oil"),
+    ("ZR=F", "RICE", "Rough Rice"),
+    ("ZO=F", "OATS", "Oats"),
+    # Softs
+    ("SB=F", "SUGAR", "Sugar"),
+    ("KC=F", "COFFEE", "Coffee"),
+    ("CC=F", "COCOA", "Cocoa"),
+    ("CT=F", "COTTON", "Cotton"),
+    ("OJ=F", "OJ", "Orange Juice"),
+    ("LBS=F", "LUMBER", "Lumber"),
+    # Livestock & dairy
+    ("LE=F", "CATTLE", "Live Cattle"),
+    ("GF=F", "FEEDER", "Feeder Cattle"),
+    ("HE=F", "HOGS", "Lean Hogs"),
+    ("DC=F", "MILK", "Class III Milk"),
 ]
 
 # Current DJIA constituents (Yahoo tickers)
@@ -150,7 +192,7 @@ NDX100_STOCKS: list[tuple[str, str]] = [
     ("CPRT", "Copart"),
 ]
 
-GROUP_ORDER = {"index": 0, "dji": 1, "ndx": 2, "sp500": 3}
+GROUP_ORDER = {"index": 0, "commodity": 1, "dji": 2, "ndx": 3, "sp500": 4}
 
 
 def build_scan_jobs() -> list[dict[str, str]]:
@@ -164,6 +206,16 @@ def build_scan_jobs() -> list[dict[str, str]]:
                 "group": group,
                 "yahoo": yahoo,
                 "symbol": display,
+                "name": name,
+            }
+        )
+
+    for yahoo, symbol, name in COMMODITIES:
+        jobs.append(
+            {
+                "group": "commodity",
+                "yahoo": yahoo,
+                "symbol": symbol,
                 "name": name,
             }
         )
@@ -232,6 +284,7 @@ def build_scan_jobs() -> list[dict[str, str]]:
 def group_label(group: str) -> str:
     return {
         "index": "指數",
+        "commodity": "大宗",
         "dji": "DJI30",
         "ndx": "NDX100",
         "sp500": "SP500",
