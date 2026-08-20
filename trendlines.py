@@ -3,11 +3,10 @@
 Touch points = strict pivots on the line plus local extrema (wing 2) whose
 wick reaches or nears the line (2%). Sharp up/down bars that break the line are
 not touch points. Line construction ignores wick exceed (body-only pierce
-rules). Up to two lines per side: the stronger line may be historical (no
-valid_to_current); the second must stay valid to the latest bar. Drawing
-extends to the latest bar; already-broken lines do not emit 1–10 bar exceed
-alerts. When multiple anchor pivots fall within K+6 bars, keep the line with
-the most touches. Sharp pierce grace unchanged.
+rules). One rising support + one falling resistance, both must pass
+valid_to_current. Drawing extends to the latest bar; already-broken lines do
+not emit 1–10 bar exceed alerts. When multiple anchor pivots fall within K+6
+bars, keep the line with the most touches. Sharp pierce grace unchanged.
 """
 
 from __future__ import annotations
@@ -19,9 +18,8 @@ import ardr
 PIVOT_HIGH = 4
 PIVOT_LOW = 4
 MAX_LOOKBACK = 2000
-BEST_TOUCH_LOOKBACK = 200
-MAX_RESISTANCE = 2
-MAX_SUPPORT = 2
+MAX_RESISTANCE = 1
+MAX_SUPPORT = 1
 MAX_LINES_PER_PIVOT = 1
 MIN_LINE_PIVOTS = 3
 PIVOT_LINE_TOL_PCT = 0.002
@@ -324,7 +322,8 @@ def build_auto_trend_lines(candles: list[dict]) -> list[dict]:
                     continue
                 if not valid_between_pivots(candles, p1, p3, resistance):
                     continue
-                passes_current = valid_to_current(candles, p1, p3, resistance)
+                if not valid_to_current(candles, p1, p3, resistance):
+                    continue
                 from_a.append(
                     {
                         "type": "resistance" if resistance else "support",
@@ -333,7 +332,6 @@ def build_auto_trend_lines(candles: list[dict]) -> list[dict]:
                         "slope": slope,
                         "span": p3["index"] - p1["index"],
                         "pivot_count": touch_count,
-                        "valid_to_current": passes_current,
                     }
                 )
             from_a = pick_best_touch_lines_nearby(from_a)
@@ -342,68 +340,16 @@ def build_auto_trend_lines(candles: list[dict]) -> list[dict]:
         candidates.sort(key=lambda c: (-c["pivot_count"], -c["span"], c["p1"]["index"]))
         picked, used = [], set()
         limit = MAX_RESISTANCE if resistance else MAX_SUPPORT
-
-        def try_pick(require_current: bool, max_add: int) -> None:
-            added = 0
-            for c in candidates:
-                if len(picked) >= limit or added >= max_add:
-                    return
-                if c["p1"]["index"] in used:
-                    continue
-                if require_current and not c.get("valid_to_current"):
-                    continue
-                picked.append(c)
-                used.add(c["p1"]["index"])
-                added += 1
-
-        try_pick(require_current=False, max_add=1)
-        if limit > 1:
-            try_pick(require_current=True, max_add=1)
+        for c in candidates:
+            if len(picked) >= limit:
+                break
+            if c["p1"]["index"] in used:
+                continue
+            picked.append(c)
+            used.add(c["p1"]["index"])
         return picked
 
     return collect(piv_high, True) + collect(piv_low, False)
-
-
-def build_best_touch_line(candles: list[dict]) -> dict | None:
-    """Single best-touch line in the latest BEST_TOUCH_LOOKBACK bars (broken OK)."""
-    start_idx = max(0, len(candles) - BEST_TOUCH_LOOKBACK)
-    slice_c = candles[start_idx:]
-    offset = start_idx
-    piv_high, _ = find_pivots(slice_c, PIVOT_HIGH, True, False)
-    _, piv_low = find_pivots(slice_c, PIVOT_LOW, False, True)
-    piv_high = [{**p, "index": p["index"] + offset} for p in piv_high]
-    piv_low = [{**p, "index": p["index"] + offset} for p in piv_low]
-
-    candidates: list[dict] = []
-    for resistance, pts in ((True, piv_high), (False, piv_low)):
-        n_pts = len(pts)
-        for a in range(n_pts):
-            for c in range(a + 1, n_pts):
-                p1, p3 = pts[a], pts[c]
-                if resistance and p3["price"] >= p1["price"]:
-                    continue
-                if not resistance and p3["price"] <= p1["price"]:
-                    continue
-                slope = (p3["price"] - p1["price"]) / (p3["index"] - p1["index"])
-                touch_count = count_line_pivots(candles, pts, a, c, p1, slope, resistance)
-                if touch_count < MIN_LINE_PIVOTS:
-                    continue
-                if not valid_between_pivots(candles, p1, p3, resistance):
-                    continue
-                candidates.append(
-                    {
-                        "type": "resistance" if resistance else "support",
-                        "p1": p1,
-                        "p2": p3,
-                        "slope": slope,
-                        "span": p3["index"] - p1["index"],
-                        "pivot_count": touch_count,
-                    }
-                )
-
-    if not candidates:
-        return None
-    return max(candidates, key=lambda c: (c["pivot_count"], c["span"], -c["p1"]["index"]))
 
 
 def check_line_invalidation(candles: list[dict], line: dict) -> bool:

@@ -247,34 +247,18 @@
     series.setData(candles);
 
     const trendLines = pack.trend_lines || [];
-    const maxTouchByType = {};
     trendLines.forEach((line) => {
-      const t = line.type || "";
-      const n = Number(line.pivot_count) || 0;
-      maxTouchByType[t] = Math.max(maxTouchByType[t] || 0, n);
-    });
-    trendLines.forEach((line) => {
-      const maxTouch = maxTouchByType[line.type] || 0;
-      const touchN = Number(line.pivot_count) || 0;
-      const weaker = !line.invalidated && maxTouch > 0 && touchN < maxTouch;
-      const alpha = line.invalidated ? 0.3 : weaker ? 0.5 : 0.95;
-      const color = line.type === "resistance"
-        ? `rgba(239,68,68,${alpha})`
-        : `rgba(34,197,94,${alpha})`;
+      const alpha = line.invalidated ? 0.3 : 0.95;
+      let color;
+      if (line.touch_alert) {
+        color = `rgba(250,204,21,${alpha})`;
+      } else if (line.type === "resistance") {
+        color = `rgba(239,68,68,${alpha})`;
+      } else {
+        color = `rgba(34,197,94,${alpha})`;
+      }
       drawSegment(line.p1.time, line.p1.price, line.endTime, line.endPrice, color, OVERLAY_LINE_WIDTH);
     });
-
-    const bestTouch = pack.best_touch_line;
-    if (bestTouch) {
-      drawSegment(
-        bestTouch.p1.time,
-        bestTouch.p1.price,
-        bestTouch.endTime,
-        bestTouch.endPrice,
-        "rgba(59,130,246,0.95)",
-        OVERLAY_LINE_WIDTH,
-      );
-    }
 
     (pack.rays || []).forEach((ray) => {
       drawRaySegments(ray);

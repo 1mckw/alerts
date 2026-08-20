@@ -52,7 +52,6 @@ TREND_EXCEED_MIN_BARS = tl.TREND_EXCEED_MIN_BARS
 TREND_EXCEED_MAX_BARS = tl.TREND_EXCEED_MAX_BARS
 TREND_EXCEED_BARS = tl.TREND_EXCEED_BARS
 build_auto_trend_lines = tl.build_auto_trend_lines
-build_best_touch_line = tl.build_best_touch_line
 check_line_invalidation = tl.check_line_invalidation
 find_trend_touch = tl.find_trend_touch
 find_trend_exceed = tl.find_trend_exceed
@@ -202,18 +201,12 @@ def chart_pack_start_index(
     candles: list[dict],
     lines: list[dict],
     chart_bars: int,
-    best_touch_line: dict | None = None,
 ) -> int:
     """Default last chart_bars; extend back to earliest trend-line p1 so lines are not clipped."""
     tail = max(0, len(candles) - chart_bars)
-    if not candles:
+    if not candles or not lines:
         return tail
-    starts = [int(line["p1"]["index"]) for line in lines] if lines else []
-    if best_touch_line is not None:
-        starts.append(int(best_touch_line["p1"]["index"]))
-    if not starts:
-        return tail
-    return min(tail, min(starts))
+    return min(tail, min(int(line["p1"]["index"]) for line in lines))
 
 
 def build_chart_pack(
@@ -221,16 +214,17 @@ def build_chart_pack(
     signals: list[dict],
     lines: list[dict],
     chart_bars: int = 800,
+    touch_types: set[str] | None = None,
 ) -> dict:
-    best_touch = build_best_touch_line(candles)
-    start_idx = chart_pack_start_index(candles, lines, chart_bars, best_touch)
+    start_idx = chart_pack_start_index(candles, lines, chart_bars)
     trimmed = candles[start_idx:]
     if not trimmed:
-        return {"candles": [], "rays": [], "trend_lines": [], "best_touch_line": None}
+        return {"candles": [], "rays": [], "trend_lines": []}
 
     t_min = int(trimmed[0]["time"])
     t_max = int(trimmed[-1]["time"])
     last_time = t_max
+    alert_types = touch_types or set()
 
     visible_signals = [s for s in signals if t_min <= int(s["time"]) <= t_max]
     rays = []
@@ -259,21 +253,9 @@ def build_chart_pack(
                 "endPrice": float(end_price),
                 "invalidated": invalidated,
                 "pivot_count": int(line.get("pivot_count") or 0),
+                "touch_alert": line["type"] in alert_types,
             }
         )
-
-    best_touch_line = None
-    if best_touch is not None:
-        end_time, end_price = line_end_at_break(candles, best_touch)
-        best_touch_line = {
-            "type": best_touch["type"],
-            "p1": {"time": int(best_touch["p1"]["time"]), "price": float(best_touch["p1"]["price"])},
-            "p2": {"time": int(best_touch["p2"]["time"]), "price": float(best_touch["p2"]["price"])},
-            "endTime": int(end_time),
-            "endPrice": float(end_price),
-            "invalidated": check_line_invalidation(candles, best_touch),
-            "pivot_count": int(best_touch.get("pivot_count") or 0),
-        }
 
     return {
         "candles": [
@@ -288,7 +270,6 @@ def build_chart_pack(
         ],
         "rays": rays,
         "trend_lines": trend,
-        "best_touch_line": best_touch_line,
     }
 
 
@@ -311,6 +292,7 @@ def scan_job(job: dict[str, str]) -> dict:
         events = late + near + trend + exceed
         for ev in events:
             ev["timeframe"] = timeframe
+        touch_types = {h["type"] for h in trend if h.get("type")}
         return {
             "group": group,
             "symbol": symbol,
@@ -321,7 +303,9 @@ def scan_job(job: dict[str, str]) -> dict:
             "bars": len(candles),
             "events": events,
             "error": None,
-            "chart": build_chart_pack(candles, signals, lines, int(cfg["chart_bars"])),
+            "chart": build_chart_pack(
+                candles, signals, lines, int(cfg["chart_bars"]), touch_types=touch_types
+            ),
         }
     except Exception as exc:  # noqa: BLE001
         return {
