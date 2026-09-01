@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""US indices + DJI30 / NDX100 / SP500 constituents — AR/DR + trend-line scanner."""
+"""US indices + DJI30 / NDX100 / SP500 constituents — AR/AD + trend-line scanner."""
 
 from __future__ import annotations
 
@@ -428,7 +428,7 @@ def render_html(payload: dict) -> str:
         return "\n".join(builder(h) for h in items)
 
     def row_ar_dr(h: dict) -> str:
-        cls = "ar" if h.get("type") == "AR" else "dr"
+        cls = "ar" if h.get("type") == "AR" else "ad"
         tf = str(h.get("timeframe", "1d"))
         return (
             f'<tr data-symbol="{html.escape(str(h.get("symbol","")), quote=True)}" '
@@ -446,7 +446,7 @@ def render_html(payload: dict) -> str:
         )
 
     def row_ar_near(h: dict) -> str:
-        cls = "ar" if h.get("type") == "AR" else "dr"
+        cls = "ar" if h.get("type") == "AR" else "ad"
         tf = str(h.get("timeframe", "1d"))
         return (
             f'<tr data-symbol="{html.escape(str(h.get("symbol","")), quote=True)}" '
@@ -522,7 +522,7 @@ def render_html(payload: dict) -> str:
     :root {{
       --bg: #000; --panel: rgba(8,12,20,.58); --border: rgba(0,255,213,.18);
       --text: #eefdfb; --muted: #7a93a8; --primary: #00f0c8;
-      --ar: #00e896; --dr: #ff4d6d;
+      --ar: #00e896; --ad: #ff4d6d;
     }}
     * {{ box-sizing: border-box; margin: 0; padding: 0; }}
     body {{
@@ -557,8 +557,8 @@ def render_html(payload: dict) -> str:
     code {{ font-family: "JetBrains Mono", monospace; color: var(--primary); }}
     .tag {{ display: inline-block; font-size: .72rem; padding: 2px 7px; border-radius: 5px; font-weight: 700; }}
     .tag.ar {{ background: rgba(0,232,150,.14); color: var(--ar); }}
-    .tag.dr {{ background: rgba(255,77,109,.14); color: var(--dr); }}
-    .tag.resist {{ background: rgba(255,77,109,.14); color: var(--dr); }}
+    .tag.ad {{ background: rgba(255,77,109,.14); color: var(--ad); }}
+    .tag.resist {{ background: rgba(255,77,109,.14); color: var(--ad); }}
     .tag.support {{ background: rgba(0,232,150,.14); color: var(--ar); }}
     .sym-btn {{ background: none; border: 0; padding: 0; cursor: pointer; color: inherit; }}
     .sym-btn:hover code {{ text-decoration: underline; }}
@@ -602,16 +602,16 @@ def render_html(payload: dict) -> str:
 </head>
 <body>
   <div class="wrap">
-    <h1>US · AR/DR &amp; 趨勢線 Alerts</h1>
+    <h1>US · AR/AD &amp; 趨勢線 Alerts</h1>
     <p class="meta">
       商品池 <strong>DJI30</strong> + <strong>NDX100</strong> + <strong>SP500</strong> + <strong>大宗</strong> · 週期 <strong>{tf_labels}</strong> ·
       掃描 {u['total']} 檔 × {u['timeframes']} 週期 = {u['jobs']} jobs · 更新 {gen}
     </p>
     <div class="cards">
       <div class="card"><div class="lbl">掃描 OK</div><div class="val">{c['ok']}/{c['jobs']}</div></div>
-      <div class="card"><div class="lbl">AR/DR 觸碰</div><div class="val">{c['ar_dr_touch']}</div></div>
-      <div class="card"><div class="lbl">AR/DR 晚觸碰</div><div class="val">{c['ar_dr_late']}</div></div>
-      <div class="card"><div class="lbl">AR/DR 接近</div><div class="val">{c['ar_dr_near']}</div></div>
+      <div class="card"><div class="lbl">AR/AD 觸碰</div><div class="val">{c['ar_dr_touch']}</div></div>
+      <div class="card"><div class="lbl">AR/AD 晚觸碰</div><div class="val">{c['ar_dr_late']}</div></div>
+      <div class="card"><div class="lbl">AR/AD 接近</div><div class="val">{c['ar_dr_near']}</div></div>
       <div class="card"><div class="lbl">趨勢線觸碰</div><div class="val">{c['trend_touch']}</div></div>
       <div class="card"><div class="lbl">趨勢線超出</div><div class="val">{c['trend_exceed']}</div></div>
     </div>
@@ -629,17 +629,17 @@ def render_html(payload: dict) -> str:
       <th>類型</th><th>週期</th><th>池</th><th>代碼</th><th>名稱</th><th class="num">價位</th><th class="num">根數</th><th>時間</th>
     </tr></thead><tbody data-section="exceed">{rows(exceed, "目前無超出信號", 8, row_exceed)}</tbody></table></div>
 
-    <h2>AR / DR 觸碰（超過 {TOUCH_AFTER_BARS} 根日 K 後 · 最近 {FRESH_BARS} 根）</h2>
+    <h2>AR / AD 觸碰（超過 {TOUCH_AFTER_BARS} 根日 K 後 · 最近 {FRESH_BARS} 根）</h2>
     <div class="panel"><table><thead><tr>
       <th>類型</th><th>週期</th><th>池</th><th>代碼</th><th>名稱</th><th class="num">價位</th><th class="num">根數</th><th>時間</th>
-    </tr></thead><tbody data-section="ar_dr">{rows(ar_dr, "目前無 AR/DR 觸碰", 8, row_ar_dr)}</tbody></table></div>
+    </tr></thead><tbody data-section="ar_dr">{rows(ar_dr, "目前無 AR/AD 觸碰", 8, row_ar_dr)}</tbody></table></div>
 
-    <h2>AR / DR 晚觸碰（{EARLY_TOUCH_MAX_BARS} 根日 K 內曾觸碰 · 超過 {LATE_MIN_AFTER} 根後 · 根數 ≥ {LATE_AGE_BARS}）</h2>
+    <h2>AR / AD 晚觸碰（{EARLY_TOUCH_MAX_BARS} 根日 K 內曾觸碰 · 超過 {LATE_MIN_AFTER} 根後 · 根數 ≥ {LATE_AGE_BARS}）</h2>
     <div class="panel"><table><thead><tr>
       <th>類型</th><th>週期</th><th>池</th><th>代碼</th><th>名稱</th><th class="num">價位</th><th class="num">根數</th><th>時間</th>
-    </tr></thead><tbody data-section="ar_late">{rows(ar_late, "目前無 AR/DR 晚觸碰", 8, row_ar_dr)}</tbody></table></div>
+    </tr></thead><tbody data-section="ar_late">{rows(ar_late, "目前無 AR/AD 晚觸碰", 8, row_ar_dr)}</tbody></table></div>
 
-    <h2>AR / DR 接近未觸（{NEAR_LOOKBACK} 根日 K 內 · 根數 ≥ {NEAR_MIN_AGE} · 誤差 0～{NEAR_MISS_TOL_PCT * 100:.0f}%）</h2>
+    <h2>AR / AD 接近未觸（{NEAR_LOOKBACK} 根日 K 內 · 根數 ≥ {NEAR_MIN_AGE} · 誤差 0～{NEAR_MISS_TOL_PCT * 100:.0f}%）</h2>
     <div class="panel"><table><thead><tr>
       <th>類型</th><th>週期</th><th>池</th><th>代碼</th><th>名稱</th><th class="num">價位</th><th class="num">差距</th><th class="num">根數</th><th>時間</th>
     </tr></thead><tbody data-section="ar_near">{rows(ar_near, "目前無接近未觸", 9, row_ar_near)}</tbody></table></div>
