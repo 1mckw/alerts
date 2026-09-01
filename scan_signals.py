@@ -59,6 +59,8 @@ fresh_range = ardr.fresh_range
 TREND_EXCEED_MIN_BARS = tl.TREND_EXCEED_MIN_BARS
 TREND_EXCEED_MAX_BARS = tl.TREND_EXCEED_MAX_BARS
 TREND_EXCEED_BARS = tl.TREND_EXCEED_BARS
+TREND_TOUCH_FRESH_BARS = tl.TREND_TOUCH_FRESH_BARS
+trend_fresh_range = tl.trend_fresh_range
 build_auto_trend_lines = tl.build_auto_trend_lines
 check_line_invalidation = tl.check_line_invalidation
 find_trend_touch = tl.find_trend_touch
@@ -166,7 +168,7 @@ def with_retries(fn, retries: int = 3, pause: float = 0.8):
 def collect_trend_touches(candles: list[dict], lines: list[dict]) -> list[dict]:
     if not candles:
         return []
-    lo, last = fresh_range(len(candles))
+    lo, last = trend_fresh_range(len(candles))
     hits = []
     for line in lines:
         if check_line_invalidation(candles, line):
@@ -642,7 +644,7 @@ def render_html(payload: dict) -> str:
       <th>類型</th><th>週期</th><th>池</th><th>代碼</th><th>名稱</th><th class="num">價位</th><th class="num">差距</th><th class="num">根數</th><th>時間</th>
     </tr></thead><tbody data-section="ar_near">{rows(ar_near, "目前無接近未觸", 9, row_ar_near)}</tbody></table></div>
 
-    <h2>趨勢線觸碰</h2>
+    <h2>趨勢線觸碰（最新 {TREND_TOUCH_FRESH_BARS} 根 · 誤差 2%）</h2>
     <div class="panel"><table><thead><tr>
       <th>類型</th><th>週期</th><th>池</th><th>代碼</th><th>名稱</th><th class="num">價位</th><th>時間</th>
     </tr></thead><tbody data-section="trend">{rows(trend, "目前無趨勢線觸碰", 7, row_trend)}</tbody></table></div>

@@ -31,6 +31,14 @@ SHARP_PIERCE_GRACE_BARS = 2
 TREND_EXCEED_MIN_BARS = 1
 TREND_EXCEED_MAX_BARS = 10
 TREND_EXCEED_BARS = TREND_EXCEED_MAX_BARS  # legacy alias = max window
+TREND_TOUCH_FRESH_BARS = 5
+
+
+def trend_fresh_range(n: int) -> tuple[int, int]:
+    """Latest TREND_TOUCH_FRESH_BARS bar indices (inclusive)."""
+    last = n - 1
+    lo = max(0, last - (TREND_TOUCH_FRESH_BARS - 1))
+    return lo, last
 
 
 def find_pivots(candles: list[dict], length: int, highs_only: bool, lows_only: bool):
