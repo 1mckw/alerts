@@ -396,15 +396,19 @@ def find_trend_exceed(
 
 
 def find_trend_touch(candles: list[dict], line: dict) -> dict | None:
+    """Latest wick touch/near-touch (2%) on the line after p2, before break if any."""
     start = max(line["p2"]["index"], line["p1"]["index"]) + 1
     break_i = find_line_break_index(candles, line)
     end = (break_i - 1) if break_i is not None else len(candles) - 1
-    for i in range(start, end + 1):
+    if start > end:
+        return None
+    resistance = line["type"] == "resistance"
+    for i in range(end, start - 1, -1):
         lp = line_price(line["p1"], line["slope"], i)
+        if not wick_qualifies_touch_build(candles, i, lp, resistance):
+            continue
         c = candles[i]
-        touched = c["high"] >= lp if line["type"] == "resistance" else c["low"] <= lp
-        if touched:
-            return {"time": c["time"], "price": lp, "index": i, "close": c["close"]}
+        return {"time": c["time"], "price": lp, "index": i, "close": c["close"]}
     return None
 
 

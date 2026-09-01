@@ -11,8 +11,13 @@ DR
 Ray rules
   Each AR/DR signal bar draws two horizontal wick rays (upper=high, lower=low).
   Both extend right from the signal bar; each stops at its first wick touch.
-  Scanner reports primary wick late touch: AR→high, DR→low, only after >one trading week (5 bars on 1D).
-  Near-miss: primary wick still active, >5 bars, fresh bar wick within tolerance but no touch.
+
+Alerts (1D)
+  Touch: first primary-wick touch after >10 bars, touch bar in latest 2 bars.
+  Late touch: first primary-wick touch within first 10 bars after signal;
+    signal age >20 and ≥60 bars.
+  Near-miss: active primary wick, signal within last 200 bars, age ≥60,
+    fresh bar wick within 0–1% of level but no touch.
 """
 
 from __future__ import annotations
@@ -25,9 +30,23 @@ DROP_PCT = 3.0
 MIN_STREAK = 3
 VOL_MULT = 1.2
 USE_STRUCTURE = True
-TOUCH_WINDOW_BARS = 5  # one trading week on 1D
+
+# Touch: after >TOUCH_AFTER_BARS, touch in latest FRESH_BARS
+TOUCH_AFTER_BARS = 10
 FRESH_BARS = 2
-NEAR_MISS_TOL_PCT = 0.004  # wick within 0.4% of ray level, no touch
+
+# Late touch: first touch within EARLY_TOUCH_MAX_BARS; signal age >LATE_MIN_AFTER and ≥LATE_AGE_BARS
+EARLY_TOUCH_MAX_BARS = 10
+LATE_MIN_AFTER = 20
+LATE_AGE_BARS = 60
+
+# Near-miss: signal within NEAR_LOOKBACK, age ≥NEAR_MIN_AGE, gap 0–NEAR_MISS_TOL_PCT
+NEAR_LOOKBACK = 200
+NEAR_MIN_AGE = 60
+NEAR_MISS_TOL_PCT = 0.01  # 0–1%
+
+# Legacy aliases
+TOUCH_WINDOW_BARS = TOUCH_AFTER_BARS
 
 
 def bear_bar(c: list[dict], i: int) -> bool:
@@ -178,10 +197,28 @@ def fresh_range(n: int) -> tuple[int, int]:
     return lo, last
 
 
+def _touch_hit(sig: dict, ray: dict, candles: list[dict], ti: int, kind: str, label: str) -> dict:
+    return {
+        "kind": kind,
+        "label": label,
+        "type": sig["type"],
+        "wick": ray["side"],
+        "signal_time": sig["time"],
+        "signal_index": sig["index"],
+        "bars_after_signal": ti - sig["index"],
+        "time": candles[ti]["time"],
+        "index": ti,
+        "level": ray["level"],
+        "close": candles[ti]["close"],
+    }
+
+
 def collect_late_ar_dr_touches(
-    candles: list[dict], signals: list[dict], touch_window_bars: int = TOUCH_WINDOW_BARS
+    candles: list[dict],
+    signals: list[dict],
+    touch_window_bars: int = TOUCH_AFTER_BARS,
 ) -> list[dict]:
-    """Report primary wick touch after >touch_window_bars when touch bar is fresh."""
+    """Primary wick touch after >touch_window_bars when touch bar is in latest FRESH_BARS."""
     if not candles:
         return []
     lo, last = fresh_range(len(candles))
@@ -198,20 +235,33 @@ def collect_late_ar_dr_touches(
         if not (lo <= ti <= last):
             continue
         hits.append(
-            {
-                "kind": "ar_dr_touch",
-                "label": f"{sig['type']} 觸碰",
-                "type": sig["type"],
-                "wick": ray["side"],
-                "signal_time": sig["time"],
-                "signal_index": sig["index"],
-                "bars_after_signal": bars_after,
-                "time": candles[ti]["time"],
-                "index": ti,
-                "level": ray["level"],
-                "close": candles[ti]["close"],
-            }
+            _touch_hit(sig, ray, candles, ti, "ar_dr_touch", f"{sig['type']} 觸碰")
         )
+    return hits
+
+
+def collect_ar_dr_late_touches(candles: list[dict], signals: list[dict]) -> list[dict]:
+    """Early primary touch (within 10 bars); signal age >20 and ≥60."""
+    if not candles:
+        return []
+    last = len(candles) - 1
+    hits: list[dict] = []
+    for sig in signals:
+        age = last - sig["index"]
+        if age <= LATE_MIN_AFTER or age < LATE_AGE_BARS:
+            continue
+        rays = resolve_signal_rays(candles, sig)
+        ray = primary_wick_ray(rays, sig["type"])
+        ti = ray.get("touch_index")
+        if ti is None:
+            continue
+        early_bars = ti - sig["index"]
+        if early_bars <= 0 or early_bars > EARLY_TOUCH_MAX_BARS:
+            continue
+        hit = _touch_hit(sig, ray, candles, ti, "ar_dr_late", f"{sig['type']} 晚觸碰")
+        hit["early_touch_bars"] = early_bars
+        hit["bars_after_signal"] = age  # report signal age (≥60)
+        hits.append(hit)
     return hits
 
 
@@ -224,22 +274,28 @@ def wick_near_miss(bar: dict, level: float, is_upper: bool) -> tuple[bool, float
         gap = level - bar["high"]
         if gap <= 0 or gap > tol:
             return False, 0.0
-        return True, gap / level * 100
+        return True, gap / abs(level) * 100
     gap = bar["low"] - level
     if gap <= 0 or gap > tol:
         return False, 0.0
-    return True, gap / level * 100
+    return True, gap / abs(level) * 100
 
 
 def collect_late_ar_dr_near_misses(
-    candles: list[dict], signals: list[dict], touch_window_bars: int = TOUCH_WINDOW_BARS
+    candles: list[dict],
+    signals: list[dict],
+    touch_window_bars: int = TOUCH_AFTER_BARS,  # unused; kept for call-site compat
 ) -> list[dict]:
-    """Report fresh bars after >touch_window where primary wick nears but does not touch."""
+    """Near-miss: signal within 200 bars, age ≥60, fresh wick within 0–1%, ray still active."""
+    del touch_window_bars
     if not candles:
         return []
     lo, last = fresh_range(len(candles))
     hits: list[dict] = []
     for sig in signals:
+        age_now = last - sig["index"]
+        if age_now < NEAR_MIN_AGE or age_now > NEAR_LOOKBACK:
+            continue
         rays = resolve_signal_rays(candles, sig)
         ray = primary_wick_ray(rays, sig["type"])
         if not ray.get("active"):
@@ -249,7 +305,7 @@ def collect_late_ar_dr_near_misses(
         best: dict | None = None
         for i in range(last, lo - 1, -1):
             bars_after = i - sig["index"]
-            if bars_after <= touch_window_bars:
+            if bars_after < NEAR_MIN_AGE:
                 continue
             near, gap_pct = wick_near_miss(candles[i], level, is_upper)
             if not near:

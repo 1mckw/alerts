@@ -28,7 +28,7 @@ TIMEFRAMES: dict[str, dict[str, Any]] = {
         "range": "5y",
         "bars": 800,
         "chart_bars": 320,
-        "touch_window": 5,
+        "touch_window": 10,
         "label": "1D",
     },
 }
@@ -42,9 +42,17 @@ MIN_STREAK = ardr.MIN_STREAK
 VOL_MULT = ardr.VOL_MULT
 TOUCH_WINDOW_BARS = ardr.TOUCH_WINDOW_BARS
 FRESH_BARS = ardr.FRESH_BARS
+TOUCH_AFTER_BARS = ardr.TOUCH_AFTER_BARS
+EARLY_TOUCH_MAX_BARS = ardr.EARLY_TOUCH_MAX_BARS
+LATE_MIN_AFTER = ardr.LATE_MIN_AFTER
+LATE_AGE_BARS = ardr.LATE_AGE_BARS
+NEAR_LOOKBACK = ardr.NEAR_LOOKBACK
+NEAR_MIN_AGE = ardr.NEAR_MIN_AGE
+NEAR_MISS_TOL_PCT = ardr.NEAR_MISS_TOL_PCT
 
 detect_signals = ardr.detect_signals
 collect_late_ar_dr_touches = ardr.collect_late_ar_dr_touches
+collect_ar_dr_late_touches = ardr.collect_ar_dr_late_touches
 collect_late_ar_dr_near_misses = ardr.collect_late_ar_dr_near_misses
 fresh_range = ardr.fresh_range
 
@@ -58,7 +66,13 @@ find_trend_exceed = tl.find_trend_exceed
 line_end_at_break = tl.line_end_at_break
 
 UA = {"User-Agent": "Mozilla/5.0 (compatible; US-Alerts/1.0)"}
-KIND_ORDER = {"trend_exceed": 0, "ar_dr_touch": 1, "ar_dr_near": 2, "trend_touch": 3}
+KIND_ORDER = {
+    "trend_exceed": 0,
+    "ar_dr_touch": 1,
+    "ar_dr_late": 2,
+    "ar_dr_near": 3,
+    "trend_touch": 4,
+}
 
 
 def chart_key(group: str, symbol: str, timeframe: str) -> str:
@@ -285,11 +299,12 @@ def scan_job(job: dict[str, str]) -> dict:
         candles = with_retries(lambda: fetch_yahoo(yahoo, timeframe))
         signals = detect_signals(candles)
         late = collect_late_ar_dr_touches(candles, signals, touch_window)
+        late_early = collect_ar_dr_late_touches(candles, signals)
         near = collect_late_ar_dr_near_misses(candles, signals, touch_window)
         lines = build_auto_trend_lines(candles)
         trend = collect_trend_touches(candles, lines)
         exceed = collect_trend_exceeds(candles, lines)
-        events = late + near + trend + exceed
+        events = late + late_early + near + trend + exceed
         for ev in events:
             ev["timeframe"] = timeframe
         touch_types = {h["type"] for h in trend if h.get("type")}
@@ -370,6 +385,7 @@ def build_symbol_catalog(results: list[dict], charts: dict) -> list[dict]:
 def render_html(payload: dict) -> str:
     hits = payload["hits"]
     ar_dr = [h for h in hits if h["kind"] == "ar_dr_touch"]
+    ar_late = [h for h in hits if h["kind"] == "ar_dr_late"]
     ar_near = [h for h in hits if h["kind"] == "ar_dr_near"]
     trend = [h for h in hits if h["kind"] == "trend_touch"]
     exceed = [h for h in hits if h["kind"] == "trend_exceed"]
@@ -514,8 +530,9 @@ def render_html(payload: dict) -> str:
     .wrap {{ max-width: 1100px; margin: 0 auto; }}
     h1 {{ font-size: 1.5rem; color: var(--primary); }}
     .meta {{ color: var(--muted); font-size: .9rem; margin: 8px 0 18px; line-height: 1.5; }}
-    .cards {{ display: grid; grid-template-columns: repeat(5, 1fr); gap: 10px; margin-bottom: 16px; }}
-    @media (max-width: 900px) {{ .cards {{ grid-template-columns: repeat(2, 1fr); }} }}
+    .cards {{ display: grid; grid-template-columns: repeat(6, 1fr); gap: 10px; margin-bottom: 16px; }}
+    @media (max-width: 1100px) {{ .cards {{ grid-template-columns: repeat(3, 1fr); }} }}
+    @media (max-width: 700px) {{ .cards {{ grid-template-columns: repeat(2, 1fr); }} }}
     .card {{ background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 12px 14px; }}
     .card .lbl {{ font-size: .65rem; color: var(--muted); text-transform: uppercase; }}
     .card .val {{ font-family: "JetBrains Mono", monospace; font-size: 1.15rem; font-weight: 700; margin-top: 4px; }}
@@ -591,6 +608,7 @@ def render_html(payload: dict) -> str:
     <div class="cards">
       <div class="card"><div class="lbl">掃描 OK</div><div class="val">{c['ok']}/{c['jobs']}</div></div>
       <div class="card"><div class="lbl">AR/DR 觸碰</div><div class="val">{c['ar_dr_touch']}</div></div>
+      <div class="card"><div class="lbl">AR/DR 晚觸碰</div><div class="val">{c['ar_dr_late']}</div></div>
       <div class="card"><div class="lbl">AR/DR 接近</div><div class="val">{c['ar_dr_near']}</div></div>
       <div class="card"><div class="lbl">趨勢線觸碰</div><div class="val">{c['trend_touch']}</div></div>
       <div class="card"><div class="lbl">趨勢線超出</div><div class="val">{c['trend_exceed']}</div></div>
@@ -609,12 +627,17 @@ def render_html(payload: dict) -> str:
       <th>類型</th><th>週期</th><th>池</th><th>代碼</th><th>名稱</th><th class="num">價位</th><th class="num">根數</th><th>時間</th>
     </tr></thead><tbody data-section="exceed">{rows(exceed, "目前無超出信號", 8, row_exceed)}</tbody></table></div>
 
-    <h2>AR / DR 觸碰（超過各週期門檻根數後）</h2>
+    <h2>AR / DR 觸碰（超過 {TOUCH_AFTER_BARS} 根日 K 後 · 最近 {FRESH_BARS} 根）</h2>
     <div class="panel"><table><thead><tr>
       <th>類型</th><th>週期</th><th>池</th><th>代碼</th><th>名稱</th><th class="num">價位</th><th class="num">根數</th><th>時間</th>
     </tr></thead><tbody data-section="ar_dr">{rows(ar_dr, "目前無 AR/DR 觸碰", 8, row_ar_dr)}</tbody></table></div>
 
-    <h2>AR / DR 接近未觸</h2>
+    <h2>AR / DR 晚觸碰（{EARLY_TOUCH_MAX_BARS} 根日 K 內曾觸碰 · 超過 {LATE_MIN_AFTER} 根後 · 根數 ≥ {LATE_AGE_BARS}）</h2>
+    <div class="panel"><table><thead><tr>
+      <th>類型</th><th>週期</th><th>池</th><th>代碼</th><th>名稱</th><th class="num">價位</th><th class="num">根數</th><th>時間</th>
+    </tr></thead><tbody data-section="ar_late">{rows(ar_late, "目前無 AR/DR 晚觸碰", 8, row_ar_dr)}</tbody></table></div>
+
+    <h2>AR / DR 接近未觸（{NEAR_LOOKBACK} 根日 K 內 · 根數 ≥ {NEAR_MIN_AGE} · 誤差 0～{NEAR_MISS_TOL_PCT * 100:.0f}%）</h2>
     <div class="panel"><table><thead><tr>
       <th>類型</th><th>週期</th><th>池</th><th>代碼</th><th>名稱</th><th class="num">價位</th><th class="num">差距</th><th class="num">根數</th><th>時間</th>
     </tr></thead><tbody data-section="ar_near">{rows(ar_near, "目前無接近未觸", 9, row_ar_near)}</tbody></table></div>
@@ -743,6 +766,7 @@ def main() -> int:
             "ok": ok,
             "errors": len(jobs) - ok,
             "ar_dr_touch": sum(1 for h in hits if h["kind"] == "ar_dr_touch"),
+            "ar_dr_late": sum(1 for h in hits if h["kind"] == "ar_dr_late"),
             "ar_dr_near": sum(1 for h in hits if h["kind"] == "ar_dr_near"),
             "trend_touch": sum(1 for h in hits if h["kind"] == "trend_touch"),
             "trend_exceed": sum(1 for h in hits if h["kind"] == "trend_exceed"),
