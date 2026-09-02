@@ -1,7 +1,7 @@
 """Auto trend lines: ≥3 touch points, body validation, sharp pierce grace.
 
 Touch points = strict pivots on the line plus local extrema (wing 2) whose
-wick reaches or nears the line (2%). Sharp up/down bars that break the line are
+wick reaches or nears the line (1%). Sharp up/down bars that break the line are
 not touch points. Line construction ignores wick exceed (body-only pierce
 rules). One rising support + one falling resistance, both must pass
 valid_to_current. Drawing extends to the latest bar; already-broken lines do
@@ -23,7 +23,7 @@ MAX_SUPPORT = 1
 MAX_LINES_PER_PIVOT = 1
 MIN_LINE_PIVOTS = 3
 PIVOT_LINE_TOL_PCT = 0.002
-NEAR_LINE_TOL_PCT = 0.02
+NEAR_LINE_TOL_PCT = 0.01
 LOCAL_EXTREME_WING = 2
 MIN_TOUCH_BAR_GAP = 3
 NEARBY_PIVOT_LOOKAHEAD = 6  # from pivot K through K+6 bars
@@ -232,7 +232,7 @@ def count_line_touch_points(
     pt_lo: int = 0,
     pt_hi: int = -1,
 ) -> int:
-    """Touch points: strict pivots on line + local extrema with wick on/near line (2%)."""
+    """Touch points: strict pivots on line + local extrema with wick on/near line (1%)."""
     if start_i > end_i:
         return 0
     on_line_pivot_idx = set()
@@ -404,7 +404,7 @@ def find_trend_exceed(
 
 
 def find_trend_touch(candles: list[dict], line: dict) -> dict | None:
-    """Latest wick touch/near-touch (2%) on the line after p2, before break if any."""
+    """Latest wick touch/near-touch (1%) on the line after p2, before break if any."""
     start = max(line["p2"]["index"], line["p1"]["index"]) + 1
     break_i = find_line_break_index(candles, line)
     end = (break_i - 1) if break_i is not None else len(candles) - 1
