@@ -14,8 +14,6 @@ Ray rules
 
 Alerts (1D)
   Touch: first primary-wick touch after >10 bars, touch bar in latest 2 bars.
-  Late touch: first primary-wick touch within first 10 bars after signal;
-    signal age >20 and ≥60 bars.
   Near-miss: active primary wick, signal within last 200 bars, age ≥60,
     fresh bar wick within 0–1% of level but no touch.
 """
@@ -34,11 +32,6 @@ USE_STRUCTURE = True
 # Touch: after >TOUCH_AFTER_BARS, touch in latest FRESH_BARS
 TOUCH_AFTER_BARS = 10
 FRESH_BARS = 2
-
-# Late touch: first touch within EARLY_TOUCH_MAX_BARS; signal age >LATE_MIN_AFTER and ≥LATE_AGE_BARS
-EARLY_TOUCH_MAX_BARS = 10
-LATE_MIN_AFTER = 20
-LATE_AGE_BARS = 60
 
 # Near-miss: signal within NEAR_LOOKBACK, age ≥NEAR_MIN_AGE, gap 0–NEAR_MISS_TOL_PCT
 NEAR_LOOKBACK = 200
@@ -237,31 +230,6 @@ def collect_late_ar_dr_touches(
         hits.append(
             _touch_hit(sig, ray, candles, ti, "ar_dr_touch", f"{sig['type']} 觸碰")
         )
-    return hits
-
-
-def collect_ar_dr_late_touches(candles: list[dict], signals: list[dict]) -> list[dict]:
-    """Early primary touch (within 10 bars); signal age >20 and ≥60."""
-    if not candles:
-        return []
-    last = len(candles) - 1
-    hits: list[dict] = []
-    for sig in signals:
-        age = last - sig["index"]
-        if age <= LATE_MIN_AFTER or age < LATE_AGE_BARS:
-            continue
-        rays = resolve_signal_rays(candles, sig)
-        ray = primary_wick_ray(rays, sig["type"])
-        ti = ray.get("touch_index")
-        if ti is None:
-            continue
-        early_bars = ti - sig["index"]
-        if early_bars <= 0 or early_bars > EARLY_TOUCH_MAX_BARS:
-            continue
-        hit = _touch_hit(sig, ray, candles, ti, "ar_dr_late", f"{sig['type']} 晚觸碰")
-        hit["early_touch_bars"] = early_bars
-        hit["bars_after_signal"] = age  # report signal age (≥60)
-        hits.append(hit)
     return hits
 
 
