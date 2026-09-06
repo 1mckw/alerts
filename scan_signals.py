@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""US indices + DJI30 / NDX100 / SP500 constituents — AR/AD + trend-line scanner."""
+"""US indices + DJI30 / NDX100 / SP500 constituents — AR/AD + trend-line scanner (1D + 1H)."""
 
 from __future__ import annotations
 
@@ -31,8 +31,16 @@ TIMEFRAMES: dict[str, dict[str, Any]] = {
         "touch_window": 10,
         "label": "1D",
     },
+    "1h": {
+        "interval": "1h",
+        "range": "730d",
+        "bars": 2000,
+        "chart_bars": 320,
+        "touch_window": 10,
+        "label": "1H",
+    },
 }
-TIMEFRAME_ORDER = ("1d",)
+TIMEFRAME_ORDER = ("1d", "1h")
 TF_ORDER = {tf: i for i, tf in enumerate(TIMEFRAME_ORDER)}
 
 LOOKBACK = ardr.LOOKBACK
@@ -504,6 +512,11 @@ def render_html(payload: dict) -> str:
     tf_labels = " · ".join(fmt_tf(tf) for tf in TIMEFRAME_ORDER)
     filter_script = read_static("report-pool-filter.html")
 
+    tf_filter_buttons = "\n".join(
+        f'      <button type="button" data-tf="{html.escape(tf, quote=True)}">{html.escape(fmt_tf(tf))}</button>'
+        for tf in TIMEFRAME_ORDER
+    )
+
     return f"""<!DOCTYPE html>
 <html lang="zh-Hant">
 <head>
@@ -616,18 +629,22 @@ def render_html(payload: dict) -> str:
       <button type="button" data-pool="ndx">NDX100 成分</button>
       <button type="button" data-pool="sp500">SP500 成分</button>
     </div>
+    <div class="pool-filters" id="tfFilters">
+      <button type="button" data-tf="all" class="active">全部週期</button>
+{tf_filter_buttons}
+    </div>
 
     <h2>趨勢線超出（最新 {TREND_EXCEED_MIN_BARS}–{TREND_EXCEED_MAX_BARS} 根）</h2>
     <div class="panel"><table><thead><tr>
       <th>類型</th><th>週期</th><th>池</th><th>代碼</th><th>名稱</th><th class="num">價位</th><th class="num">根數</th><th>時間</th>
     </tr></thead><tbody data-section="exceed">{rows(exceed, "目前無超出信號", 8, row_exceed)}</tbody></table></div>
 
-    <h2>AR / AD 觸碰（超過 {TOUCH_AFTER_BARS} 根日 K 後 · 最近 {FRESH_BARS} 根）</h2>
+    <h2>AR / AD 觸碰（超過 {TOUCH_AFTER_BARS} 根 K 後 · 最近 {FRESH_BARS} 根）</h2>
     <div class="panel"><table><thead><tr>
       <th>類型</th><th>週期</th><th>池</th><th>代碼</th><th>名稱</th><th class="num">價位</th><th class="num">根數</th><th>時間</th>
     </tr></thead><tbody data-section="ar_dr">{rows(ar_dr, "目前無 AR/AD 觸碰", 8, row_ar_dr)}</tbody></table></div>
 
-    <h2>AR / AD 接近未觸（{NEAR_LOOKBACK} 根日 K 內 · 根數 ≥ {NEAR_MIN_AGE} · 誤差 0～{NEAR_MISS_TOL_PCT * 100:.0f}%）</h2>
+    <h2>AR / AD 接近未觸（{NEAR_LOOKBACK} 根 K 內 · 根數 ≥ {NEAR_MIN_AGE} · 誤差 0～{NEAR_MISS_TOL_PCT * 100:.0f}%）</h2>
     <div class="panel"><table><thead><tr>
       <th>類型</th><th>週期</th><th>池</th><th>代碼</th><th>名稱</th><th class="num">價位</th><th class="num">差距</th><th class="num">根數</th><th>時間</th>
     </tr></thead><tbody data-section="ar_near">{rows(ar_near, "目前無接近未觸", 9, row_ar_near)}</tbody></table></div>
